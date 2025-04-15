@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@types/three": "^0.175.0",
+    "cheerio": "^1.0.0",
     "hono": "^4.7.6",
     "next": "15.3.0",
     "react": "^19.0.0",
