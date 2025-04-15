@@ -42,9 +42,9 @@ function symbolMap(symbol: string): string {
 }
 
 // エントリー行解析用正規表現
-// 例: "☆専攻科１年　５・６限　応用制御工学（平澤）⇒７・８限へ"
 const entryRegex =
   /^(?<symbol>[◉◎◇☆])\s*(?<class>[^\s]+)\s+(?<period>\d+・\d+限)\s+(?<rest>.+)$/;
+
 // "⇒" 後が「数字・数字限」または「数字・数字限へ」かを判定する正規表現
 const periodRegex = /^(?<period2>\d+・\d+限)(?:へ)?$/;
 
@@ -67,12 +67,13 @@ interface FinalOutput {
   休講情報: DateEntry[];
 }
 
+// アプリ作成
 const app = new Hono();
 
-// prettyJSON ミドルウェアを全ルートに適用（レスポンス JSON を整形して返す）
+// prettyJSON ミドルウェアを全ルートに適用
 app.use("*", prettyJSON());
 
-// GET "/" へのルート処理
+// メインルート
 app.get("/", async (c: Context) => {
   try {
     const url = "https://www.ibaraki-ct.ac.jp/info/archives/65544";
@@ -80,47 +81,42 @@ app.get("/", async (c: Context) => {
     const html: string = await response.text();
 
     const $ = load(html);
-    // 休講情報本文が含まれる領域は id="post_main" と仮定
     const $postMain = $("#post_main");
     if (!$postMain.length) {
       return c.json({ error: "post_main が見つかりません" }, 404);
     }
 
-    // 結果を日付ごとに格納するオブジェクト（キー: 日付文字列）
     const results: { [date: string]: Entry[] } = {};
     let currentDate = "";
 
-    // $postMain 内の <p> タグごとに走査
     $postMain.find("p").each((_, elem) => {
       const $p = $(elem);
       let text: string = $p.text();
       text = normalizeWhitespace(fullwidthToHalfwidth(text));
 
-      // <mark> タグがあれば、この段落は日付情報とみなす
       if ($p.find("mark").length > 0) {
         currentDate = text;
         if (!results[currentDate]) {
           results[currentDate] = [];
         }
       } else {
-        // 日付が未設定ならスキップ
         if (!currentDate) return;
+
         const match = entryRegex.exec(text);
         if (match && match.groups) {
           const { symbol, class: classText, period, rest } = match.groups;
+
           const typeField = symbolMap(symbol);
           let subject1: string | null = null;
           let subject2: string | null = null;
           let period2: string | null = null;
+
           if (rest.includes("⇒")) {
             const parts = rest.split("⇒", 2).map((s) => s.trim());
             subject1 = parts[0] === "授業なし" ? null : parts[0];
+
             const periodMatch = periodRegex.exec(parts[1]);
-            if (
-              periodMatch &&
-              periodMatch.groups &&
-              periodMatch.groups.period2
-            ) {
+            if (periodMatch?.groups?.period2) {
               period2 = periodMatch.groups.period2.trim();
               subject2 = null;
             } else {
@@ -129,6 +125,7 @@ app.get("/", async (c: Context) => {
           } else {
             subject1 = rest === "授業なし" ? null : rest;
           }
+
           const entry: Entry = {
             type: typeField,
             class: classText.trim(),
@@ -137,6 +134,7 @@ app.get("/", async (c: Context) => {
             subject2,
             period2,
           };
+
           if (!results[currentDate]) {
             results[currentDate] = [];
           }
@@ -155,11 +153,12 @@ app.get("/", async (c: Context) => {
     };
 
     return c.json(finalOutput);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error:", error);
-    return c.json({ error: error.message }, 500);
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 500);
   }
 });
 
-// Next.js の API ルートとして Hono アプリケーションをエッジ関数で提供
+// Edge Runtime 用の GET エクスポート
 export const GET = handle(app);
