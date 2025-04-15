@@ -74,7 +74,7 @@ const app = new Hono();
 app.use("*", prettyJSON());
 
 // メインルート
-app.get("/", async (c: Context) => {
+app.get("/api/closed-lecture", async (c: Context) => {
   try {
     const url = "https://www.ibaraki-ct.ac.jp/info/archives/65544";
     const response = await fetch(url);
