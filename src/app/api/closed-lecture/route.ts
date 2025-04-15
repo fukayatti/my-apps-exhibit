@@ -152,7 +152,9 @@ app.get("/api/closed-lecture", async (c: Context) => {
         })),
     };
 
-    return c.json(finalOutput);
+    return c.json(finalOutput, 200, {
+      "Content-Type": "application/json; charset=utf-8",
+    });
   } catch (error: unknown) {
     console.error("Error:", error);
     const message = error instanceof Error ? error.message : String(error);
