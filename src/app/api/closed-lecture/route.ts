@@ -18,7 +18,7 @@ function fullwidthToHalfwidth(str: string): string {
     .join("");
 }
 
-// 空白（改行・複数スペース）を単一のスペースに統一する
+// 空白（改行や複数スペース）を単一のスペースに統一する
 function normalizeWhitespace(str: string): string {
   return str.replace(/\s+/g, " ").trim();
 }
@@ -43,7 +43,7 @@ function symbolMap(symbol: string): string {
 // 例: "☆専攻科１年　５・６限　応用制御工学（平澤）⇒７・８限へ"
 const entryRegex: RegExp =
   /^(?<symbol>[◉◎◇☆])\s*(?<class>[^\s]+)\s+(?<period>\d+・\d+限)\s+(?<rest>.+)$/;
-// 「⇒」 後が「数字・数字限」または「数字・数字限へ」かチェックする正規表現
+// 「⇒」 後の部分が「数字・数字限」または「数字・数字限へ」かチェックする正規表現
 const periodRegex: RegExp = /^(?<period2>\d+・\d+限)(?:へ)?$/;
 
 // 型定義
@@ -67,7 +67,7 @@ type FinalOutput = {
 
 const app = new Hono();
 
-// prettyJSON ミドルウェアで整形済みの JSON レスポンスを返す
+// prettyJSON ミドルウェアで整形済み JSON レスポンスを返す
 app.use("*", prettyJSON());
 
 app.get("/api/closed-lecture", async (c: Context) => {
@@ -77,7 +77,7 @@ app.get("/api/closed-lecture", async (c: Context) => {
     const response = await fetch(url);
     const html: string = await response.text();
 
-    // Cheerio により HTML をパース
+    // Cheerio で HTML をパース
     const $ = load(html);
     // 休講情報の本文は id="post_main" 内にあると仮定
     const $postMain = $("#post_main");
@@ -89,17 +89,19 @@ app.get("/api/closed-lecture", async (c: Context) => {
     const results: { [date: string]: Entry[] } = {};
     let currentDate = "";
 
-    // $postMain 内の全ての <p> タグを走査
+    // $postMain 内のすべての <p> タグを走査
     $postMain.find("p").each((_, elem) => {
       const $p = $(elem);
       let text: string = $p.text();
       text = fullwidthToHalfwidth(text);
       text = normalizeWhitespace(text);
 
-      // <mark> タグが含まれている段落は日付情報として扱う
+      // <mark> タグが含まれている段落は日付とみなす
       if ($p.find("mark").length > 0) {
         currentDate = text;
-        if (!results[currentDate]) results[currentDate] = [];
+        if (!results[currentDate]) {
+          results[currentDate] = [];
+        }
       } else {
         if (!currentDate) return;
         const match = entryRegex.exec(text);
@@ -120,6 +122,7 @@ app.get("/api/closed-lecture", async (c: Context) => {
               periodMatch.groups.period2
             ) {
               period2 = periodMatch.groups.period2.trim();
+              // ※ここは元々 period2 が抽出された場合は subject2 を null にする
               subject2 = null;
             } else {
               subject2 = parts[1] === "授業なし" ? null : parts[1];
@@ -127,11 +130,16 @@ app.get("/api/closed-lecture", async (c: Context) => {
           } else {
             subject1 = rest === "授業なし" ? null : rest;
           }
-          // period2 が抽出できなかった場合は、必ず period1 の値を代入する
+          // もし period2 が抽出できなかった場合は、period2 に period1（＝period）を代入する
           if (!period2 || period2 === "") {
             period2 = period.trim();
           }
+          // さらに、もし subject2 が null かつ period1 と period2 が異なる場合は、subject2 に subject1 を代入する
+          if (subject2 === null && period.trim() !== period2) {
+            subject2 = subject1;
+          }
 
+          // キー順：type, class, period1, period2, subject1, subject2
           const entry: Entry = {
             type: typeField,
             class: classText.trim(),
@@ -162,5 +170,5 @@ app.get("/api/closed-lecture", async (c: Context) => {
   }
 });
 
-// HTTP GET メソッドとして名前付きエクスポート（Next.js App Router 用）
+// GET を named export としてエクスポート（Next.js App Router 用）
 export const GET = app.fetch;
