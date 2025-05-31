@@ -776,20 +776,49 @@ export class TranslationSystem {
           break;
         }
 
+        // 完了したシーケンスが十分にある場合は早期終了
+        if (completedSequences.length >= numBeams && step > 10) {
+          console.log(
+            `[TranslationSystem][translate] Beam Search: 十分な完了シーケンスがあるため早期終了 (ステップ ${step})`
+          );
+          break;
+        }
+
         const nextBeamsAccumulator: Array<{
           tokens: number[];
           score: number;
           completed: boolean;
         }> = [];
+
         for (const beam of beams) {
           if (beam.completed) {
             nextBeamsAccumulator.push(beam); // 完了したビームはそのまま次へ
             continue;
           }
+
+          // 同じトークンの繰り返しをチェック
+          if (beam.tokens.length > 3) {
+            const lastThreeTokens = beam.tokens.slice(-3);
+            if (
+              lastThreeTokens.every((token) => token === lastThreeTokens[0])
+            ) {
+              console.log(
+                `[TranslationSystem][translate][BeamStep ${step}] 同じトークンの繰り返しを検出: ${lastThreeTokens[0]}, ビームを終了`
+              );
+              // 繰り返しビームを強制終了
+              completedSequences.push({
+                tokens: [...beam.tokens, this.tokenizer.eosToken!],
+                score: beam.score - 10, // ペナルティを加える
+                completed: true,
+              });
+              continue;
+            }
+          }
+
           console.log(
-            `[TranslationSystem][translate][BeamStep ${step}] Processing beam: tokens=${
-              beam.tokens
-            }, score=${beam.score.toFixed(4)}`
+            `[TranslationSystem][translate][BeamStep ${step}] Processing beam: tokens=${beam.tokens.slice(
+              -3
+            )}... (${beam.tokens.length}), score=${beam.score.toFixed(4)}`
           );
 
           feeds.decoder_input_ids = new ort.Tensor(
@@ -797,40 +826,38 @@ export class TranslationSystem {
             BigInt64Array.from(beam.tokens.map(BigInt)),
             [1, beam.tokens.length]
           );
-          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Decoder input_ids: ${beam.tokens}`);
 
           const output = await this.session.run(feeds);
           const logits = output.logits.data as Float32Array;
-          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Logits shape: ${output.logits.dims.join(',')}, length: ${logits.length}`);
 
           // Logitsの最後のトークンに対応する部分のみを取得
-          // Logitsの形状は [batch_size, sequence_length, vocab_size]
-          // ここでは batch_size = 1, sequence_length = beam.tokens.length
           const vocabSize = this.config.vocab_size;
           const sequenceLength = beam.tokens.length;
           const nextTokenLogits = logits.slice(
             (sequenceLength - 1) * vocabSize,
             sequenceLength * vocabSize
           );
-          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Next token logits (slice from ${(sequenceLength - 1) * vocabSize} to ${sequenceLength * vocabSize}, length ${nextTokenLogits.length}):`, nextTokenLogits.slice(0, 10));
 
           const probabilities = this.softmax(nextTokenLogits);
-          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Probabilities (sample):`, probabilities.slice(0, 10));
-          const topK = this.getTopK(probabilities, numBeams * 2); // 探索候補を少し増やす (numBeams * 2 程度)
-          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Top K tokens:`, topK.map(t => ({id: t.index, prob: t.probability.toFixed(6)})));
+
+          // 前回と同じトークンにペナルティを与える
+          if (beam.tokens.length > 0) {
+            const lastToken = beam.tokens[beam.tokens.length - 1];
+            probabilities[lastToken] *= 0.5; // 繰り返しペナルティ
+          }
+
+          const topK = this.getTopK(probabilities, numBeams * 2);
 
           for (const { index: tokenId, probability } of topK) {
-            if (probability < 1e-9) continue; // ごくわずかな確率のトークンは無視 (log(0)対策)
+            if (probability < 1e-9) continue;
 
             const newTokens = [...beam.tokens, tokenId];
             const newScore = beam.score + Math.log(probability);
-            // console.log(`[TranslationSystem][translate][BeamStep ${step}] Candidate: newTokens=${newTokens}, newScore=${newScore.toFixed(4)}, tokenId=${tokenId}, prob=${probability.toFixed(6)}`);
 
             if (
               tokenId === this.tokenizer.eosToken ||
               newTokens.length >= maxLength
             ) {
-              // console.log(`[TranslationSystem][translate][BeamStep ${step}] Completed sequence: tokens=${newTokens}, score=${newScore.toFixed(4)}, EOS=${tokenId === this.tokenizer.eosToken}, MaxLength=${newTokens.length >= maxLength}`);
               completedSequences.push({
                 tokens: newTokens,
                 score: newScore,
@@ -868,7 +895,7 @@ export class TranslationSystem {
         // 完了したシーケンスも保持しつつ、ビーム数を超えないように調整
         // completedSequencesもスコアでソートし、上位を保持するなどの戦略も考えられる
 
-        if (onProgress && (step % 5 === 0 || step === maxLength - 1)) {
+        if (onProgress && (step % 10 === 0 || step === maxLength - 1)) {
           const progressInfo: StatusMessage = {
             type: "info",
             message: `推論中 (ステップ ${
