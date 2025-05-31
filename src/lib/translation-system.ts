@@ -23,7 +23,17 @@ export class TranslationSystem {
     // ONNX Runtime Webの設定
     ort.env.wasm.numThreads = 1; // スレッド数を1に設定してCORS問題を回避
     ort.env.wasm.simd = true; // SIMD最適化を有効化
+    ort.env.webgpu.profiling = { mode: "off" }; // WebGPUプロファイリングを無効化
     ort.env.logLevel = "warning"; // ログレベルを設定
+
+    // WebGPUサポートチェック
+    if (typeof navigator !== "undefined" && "gpu" in navigator) {
+      console.log("✓ WebGPUサポートが検出されました");
+    } else {
+      console.log(
+        "⚠️ WebGPUサポートが検出されませんでした。WASMにフォールバックします。"
+      );
+    }
   }
 
   async initStorage(): Promise<void> {
@@ -128,9 +138,12 @@ export class TranslationSystem {
       // ONNXモデルの読み込み
       const modelBuffer = files["model.onnx"];
 
-      // ONNX Runtime用の設定
+      // ONNX Runtime用の設定（WebGPUを優先、フォールバックでWASM）
       const sessionOptions: ort.InferenceSession.SessionOptions = {
-        executionProviders: ["wasm"],
+        executionProviders: [
+          "webgpu", // WebGPUを使用
+          "wasm", // WebGPUが利用できない場合のフォールバック
+        ],
         graphOptimizationLevel: "all",
         executionMode: "sequential",
         enableMemPattern: false,
@@ -173,6 +186,12 @@ export class TranslationSystem {
         } else if (error.message.includes("CORS")) {
           errorMessage =
             "CORS エラー: ブラウザのセキュリティ制限により、ファイルの読み込みに失敗しました。Chrome またはFirefoxをお試しください。";
+        } else if (
+          error.message.includes("webgpu") ||
+          error.message.includes("WebGPU")
+        ) {
+          errorMessage =
+            "WebGPU エラー: WebGPUの初期化に失敗しました。ChromeまたはEdgeの最新版をお試しください。";
         } else {
           errorMessage = `エラー: ${error.message}`;
         }
