@@ -68,13 +68,6 @@ type Entry = {
   subject2: string | null;
 };
 
-type DateEntry = {
-  date: string;
-  entries: Entry[];
-};
-
-type FinalOutput = { 休講情報: DateEntry[] };
-
 const app = new Hono();
 app.use("*", prettyJSON());
 
