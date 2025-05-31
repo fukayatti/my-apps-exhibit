@@ -391,7 +391,11 @@ class TokenizerJsonProcessor implements TokenizerInterface {
   }
 
   get decoderStartToken(): number {
-    return this.specialTokens["<s>"] || 2;
+    return this.specialTokens["<s>"] ?? this.vocab["<s>"] ?? 2; // Ensure fallback
+  }
+
+  set decoderStartToken(id: number) {
+    this.specialTokens["<s>"] = id;
   }
 
   get eosToken(): number {
