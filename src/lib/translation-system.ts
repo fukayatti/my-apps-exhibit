@@ -1,12 +1,12 @@
 import * as ort from "onnxruntime-web";
 import { ModelStorage } from "./model-storage";
 import { ModelDownloader } from "./model-downloader";
-import { SMALL100TokenizerJS } from "./tokenizer";
+import { HuggingFaceTokenizer } from "./tokenizer";
 import { TranslationConfig, StatusMessage, ModelInfo } from "./types";
 
 export class TranslationSystem {
   private session: ort.InferenceSession | null = null;
-  private tokenizer: SMALL100TokenizerJS | null = null;
+  private tokenizer: HuggingFaceTokenizer | null = null;
   private config: TranslationConfig | null = null;
   private isLoaded = false;
   private downloader: ModelDownloader;
@@ -62,6 +62,7 @@ export class TranslationSystem {
         "model.onnx",
         "vocab.json",
         "sentencepiece.bpe.model",
+        "tokenizer_config.json",
         "config.json",
       ];
       const cachedFiles: Record<string, ArrayBuffer> = {};
@@ -128,15 +129,19 @@ export class TranslationSystem {
       const configText = new TextDecoder().decode(configBuffer);
       this.config = JSON.parse(configText);
 
-      // 語彙ファイルの読み込み
-      const vocabBuffer = files["vocab.json"];
-
       // トークナイザーの初期化
-      this.tokenizer = new SMALL100TokenizerJS();
-      await this.tokenizer.loadVocab(vocabBuffer);
+      this.tokenizer = new HuggingFaceTokenizer();
 
-      // SentencePieceモデルの読み込み
-      await this.tokenizer.loadSentencePiece();
+      // HuggingFaceの標準ファイルから読み込み
+      const vocabBuffer = files["vocab.json"];
+      const spModelBuffer = files["sentencepiece.bpe.model"];
+      const tokenizerConfigBuffer = files["tokenizer_config.json"];
+
+      await this.tokenizer.loadFromHuggingFaceFiles(
+        vocabBuffer,
+        spModelBuffer,
+        tokenizerConfigBuffer
+      );
 
       // ONNXモデルの読み込み
       const modelBuffer = files["model.onnx"];

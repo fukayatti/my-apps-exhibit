@@ -5,8 +5,9 @@ export class ModelDownloader {
     "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/";
   private files: ModelFile[] = [
     { name: "model.onnx", size: "~150MB" },
-    { name: "vocab.json", size: "~2MB" },
-    { name: "sentencepiece.bpe.model", size: "~800KB" },
+    { name: "vocab.json", size: "~3.5MB" },
+    { name: "sentencepiece.bpe.model", size: "~2.3MB" },
+    { name: "tokenizer_config.json", size: "~2KB" },
     { name: "config.json", size: "~1KB" },
   ];
   private downloadedFiles: Record<string, ArrayBuffer> = {};

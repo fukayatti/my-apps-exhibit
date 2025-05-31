@@ -1,433 +1,183 @@
-import { TokenizeResult, TextSegment } from "./types";
+import { TokenizeResult } from "./types";
 
-export class SMALL100TokenizerJS {
-  private encoder: Record<string, number> | null = null;
-  private decoder: Record<number, string> | null = null;
-  private decoderStartTokenId: number | null = null;
-  private eosTokenId: number | null = null;
-  private padTokenId: number | null = null;
-  private unkTokenId: number | null = null;
-  private langTokenToId: Record<string, number> = {};
-  private idToLangToken: Record<number, string> = {};
-  private langCodeToId: Record<string, number> = {};
-  private encoderSize = 0;
-  private tgtLang = "en";
-  private curLangId: number | null = null;
-  private numMadeupWords = 8;
-  private japaneseSubwords: Record<string, boolean>;
-  private spModel: {
-    encode: (text: string) => string[];
-    decode: (tokens: string[]) => string;
-  } | null = null;
+// Transformers.jsを動的にインポートするためのインターフェース
+interface TransformersModule {
+  AutoTokenizer: {
+    from_pretrained: (modelName: string, options?: any) => Promise<any>;
+  };
+}
 
-  // FAIRSEQ言語コード（簡略版）
-  private fairseqLanguageCodes = [
-    "af",
-    "am",
-    "ar",
-    "ast",
-    "az",
-    "ba",
-    "be",
-    "bg",
-    "bn",
-    "br",
-    "bs",
-    "ca",
-    "ceb",
-    "cs",
-    "cy",
-    "da",
-    "de",
-    "el",
-    "en",
-    "es",
-    "et",
-    "fa",
-    "ff",
-    "fi",
-    "fr",
-    "fy",
-    "ga",
-    "gd",
-    "gl",
-    "gu",
-    "ha",
-    "he",
-    "hi",
-    "hr",
-    "ht",
-    "hu",
-    "hy",
-    "id",
-    "ig",
-    "ilo",
-    "is",
-    "it",
-    "ja",
-    "jv",
-    "ka",
-    "kk",
-    "km",
-    "kn",
-    "ko",
-    "lb",
-    "lg",
-    "ln",
-    "lo",
-    "lt",
-    "lv",
-    "mg",
-    "mk",
-    "ml",
-    "mn",
-    "mr",
-    "ms",
-    "my",
-    "ne",
-    "nl",
-    "no",
-    "ns",
-    "oc",
-    "or",
-    "pa",
-    "pl",
-    "ps",
-    "pt",
-    "ro",
-    "ru",
-    "sd",
-    "si",
-    "sk",
-    "sl",
-    "so",
-    "sq",
-    "sr",
-    "ss",
-    "su",
-    "sv",
-    "sw",
-    "ta",
-    "th",
-    "tl",
-    "tn",
-    "tr",
-    "uk",
-    "ur",
-    "uz",
-    "vi",
-    "wo",
-    "xh",
-    "yi",
-    "yo",
-    "zh",
-    "zu",
-  ];
+export class HuggingFaceTokenizer {
+  private tokenizer: any = null;
+  private isLoaded = false;
+  private transformers: TransformersModule | null = null;
 
-  constructor() {
-    this.japaneseSubwords = this.generateJapaneseSubwords();
-  }
+  async loadFromPretrained(modelPath: string): Promise<void> {
+    try {
+      console.log("HuggingFace tokenizerを読み込み中...");
 
-  private generateJapaneseSubwords(): Record<string, boolean> {
-    const subwords: Record<string, boolean> = {};
+      // Transformers.jsを動的にインポート
+      this.transformers = (await import(
+        "@xenova/transformers"
+      )) as TransformersModule;
 
-    // ひらがな
-    for (let i = 0x3041; i <= 0x3096; i++) {
-      const char = String.fromCharCode(i);
-      subwords[`▁${char}`] = true;
-      subwords[char] = true;
-    }
-
-    // カタカナ
-    for (let i = 0x30a1; i <= 0x30f6; i++) {
-      const char = String.fromCharCode(i);
-      subwords[`▁${char}`] = true;
-      subwords[char] = true;
-    }
-
-    // 基本的な漢字（常用漢字の一部）
-    const commonKanji =
-      "日本語英語世界今日天気時間人間社会国家政治経済文化教育学校会社仕事生活家族友達愛情希望未来過去現在";
-    for (const char of commonKanji) {
-      subwords[`▁${char}`] = true;
-      subwords[char] = true;
-    }
-
-    return subwords;
-  }
-
-  async loadVocab(vocabBuffer: ArrayBuffer): Promise<void> {
-    const vocabText = new TextDecoder().decode(vocabBuffer);
-    this.encoder = JSON.parse(vocabText);
-    this.decoder = {};
-
-    if (this.encoder) {
-      for (const [token, id] of Object.entries(this.encoder)) {
-        this.decoder[id as number] = token;
-      }
-
-      this.encoderSize = Object.keys(this.encoder).length;
-
-      // 言語トークンマッピングを作成
-      this.fairseqLanguageCodes.forEach((langCode, i) => {
-        const langToken = `__${langCode}__`;
-        const langId = this.encoderSize + i;
-        this.langTokenToId[langToken] = langId;
-        this.idToLangToken[langId] = langToken;
-        this.langCodeToId[langCode] = langId;
-      });
-
-      this.curLangId = this.getLangId(this.tgtLang) ?? null;
-
-      // 特殊トークンIDを設定
-      this.padTokenId = this.encoder["<pad>"] ?? null;
-      this.unkTokenId = this.encoder["<unk>"] ?? null;
-      this.eosTokenId = this.encoder["</s>"] ?? null;
-    }
-  }
-
-  async loadSentencePiece(): Promise<void> {
-    // SentencePieceの簡易実装
-    this.spModel = {
-      encode: (text: string) => {
-        return this.encodeBPE(text);
-      },
-      decode: (tokens: string[]) => {
-        // バッククォートやその他の問題のあるトークンを除去
-        const cleanTokens = tokens.filter((token) => {
-          // 空文字や問題のあるトークンをフィルタリング
-          if (!token || token.trim() === "") return false;
-          if (token === "`" || token === "▁`") return false;
-          if (token.includes("`") && token.trim().length <= 2) return false;
-          return true;
-        });
-
-        const decoded = cleanTokens.join("").replace(/▁/g, " ");
-        // 最終的にバッククォートの残骸を除去
-        return decoded.replace(/`+/g, "").trim();
-      },
-    };
-  }
-
-  private encodeBPE(text: string): string[] {
-    const tokens: string[] = [];
-    const normalizedText = text.trim();
-
-    // 文字種別ごとに分割
-    const segments = this.segmentText(normalizedText);
-
-    for (const segment of segments) {
-      if (segment.type === "japanese") {
-        tokens.push(...this.encodeJapanese(segment.text));
-      } else if (segment.type === "latin") {
-        tokens.push(...this.encodeLatin(segment.text));
-      } else {
-        tokens.push(...this.encodeDefault(segment.text));
-      }
-    }
-
-    return tokens;
-  }
-
-  private segmentText(text: string): TextSegment[] {
-    const segments: TextSegment[] = [];
-    let current = "";
-    let currentType: TextSegment["type"] | null = null;
-
-    for (const char of text) {
-      const type = this.getCharType(char);
-
-      if (type !== currentType) {
-        if (current) {
-          segments.push({ text: current, type: currentType! });
+      // AutoTokenizerを使用
+      this.tokenizer = await this.transformers.AutoTokenizer.from_pretrained(
+        modelPath,
+        {
+          cache_dir: "/.cache/huggingface",
+          local_files_only: false,
         }
-        current = char;
-        currentType = type;
-      } else {
-        current += char;
-      }
-    }
+      );
 
-    if (current) {
-      segments.push({ text: current, type: currentType! });
+      this.isLoaded = true;
+      console.log("✓ HuggingFace tokenizerの読み込み完了");
+    } catch (error) {
+      console.error("Tokenizer読み込みエラー:", error);
+      throw new Error(`Tokenizerの読み込みに失敗: ${error}`);
     }
-
-    return segments;
   }
 
-  private getCharType(char: string): TextSegment["type"] {
-    const code = char.charCodeAt(0);
+  async loadFromBuffer(tokenizerBuffer: ArrayBuffer): Promise<void> {
+    try {
+      console.log("tokenizer.jsonから読み込み中...");
 
-    // ひらがな・カタカナ・漢字
-    if (
-      (code >= 0x3041 && code <= 0x3096) ||
-      (code >= 0x30a1 && code <= 0x30f6) ||
-      (code >= 0x4e00 && code <= 0x9faf)
-    ) {
-      return "japanese";
+      // Transformers.jsを動的にインポート
+      this.transformers = (await import(
+        "@xenova/transformers"
+      )) as TransformersModule;
+
+      // tokenizer.jsonの内容を解析
+      const tokenizerConfig = JSON.parse(
+        new TextDecoder().decode(tokenizerBuffer)
+      );
+
+      // 簡易的なBPEトークナイザーを実装
+      this.tokenizer = new SimpleBPETokenizer(tokenizerConfig);
+      this.isLoaded = true;
+      console.log("✓ tokenizer.jsonから読み込み完了");
+    } catch (error) {
+      console.error("Tokenizer読み込みエラー:", error);
+      throw new Error(`tokenizer.jsonの読み込みに失敗: ${error}`);
     }
-
-    // 英数字
-    if (
-      (code >= 0x0041 && code <= 0x005a) ||
-      (code >= 0x0061 && code <= 0x007a) ||
-      (code >= 0x0030 && code <= 0x0039)
-    ) {
-      return "latin";
-    }
-
-    return "other";
   }
 
-  private encodeJapanese(text: string): string[] {
-    const tokens: string[] = [];
-    let remaining = "▁" + text;
+  async loadFromHuggingFaceFiles(
+    vocabBuffer: ArrayBuffer,
+    spModelBuffer: ArrayBuffer,
+    tokenizerConfigBuffer: ArrayBuffer
+  ): Promise<void> {
+    try {
+      console.log("HuggingFaceファイルから読み込み中...");
 
-    while (remaining.length > 0) {
-      let found = false;
+      // vocab.jsonを解析
+      const vocab = JSON.parse(new TextDecoder().decode(vocabBuffer));
 
-      // 長いサブワードから順に探す
-      for (let len = Math.min(remaining.length, 6); len >= 1; len--) {
-        const subword = remaining.substring(0, len);
-        if (this.encoder && this.encoder[subword] !== undefined) {
-          tokens.push(subword);
-          remaining = remaining.substring(len);
-          found = true;
-          break;
-        }
-      }
+      // tokenizer_config.jsonを解析
+      const tokenizerConfig = JSON.parse(
+        new TextDecoder().decode(tokenizerConfigBuffer)
+      );
 
-      if (!found) {
-        const char = remaining[0];
-        if (this.encoder && this.encoder[char] !== undefined) {
-          tokens.push(char);
-        } else {
-          tokens.push("<unk>");
-        }
-        remaining = remaining.substring(1);
-      }
+      // SentencePieceモデルをHuggingFaceSentencePieceTokenizerで処理
+      this.tokenizer = new HuggingFaceSentencePieceTokenizer(
+        vocab,
+        spModelBuffer,
+        tokenizerConfig
+      );
+
+      this.isLoaded = true;
+      console.log("✓ HuggingFaceファイルから読み込み完了");
+    } catch (error) {
+      console.error("Tokenizer読み込みエラー:", error);
+      throw new Error(`HuggingFaceファイルの読み込みに失敗: ${error}`);
     }
-
-    return tokens;
-  }
-
-  private encodeLatin(text: string): string[] {
-    const tokens: string[] = [];
-    const words = text.toLowerCase().split(/\s+/);
-
-    for (let i = 0; i < words.length; i++) {
-      if (words[i].length === 0) continue;
-
-      const wordWithPrefix = i === 0 ? "▁" + words[i] : "▁" + words[i];
-
-      if (this.encoder && this.encoder[wordWithPrefix] !== undefined) {
-        tokens.push(wordWithPrefix);
-      } else {
-        // サブワード分割
-        tokens.push(...this.encodeWord(wordWithPrefix));
-      }
-    }
-
-    return tokens;
-  }
-
-  private encodeWord(word: string): string[] {
-    const tokens: string[] = [];
-    let remaining = word;
-
-    while (remaining.length > 0) {
-      let found = false;
-
-      for (let len = Math.min(remaining.length, 10); len >= 1; len--) {
-        const subword = remaining.substring(0, len);
-        if (this.encoder && this.encoder[subword] !== undefined) {
-          tokens.push(subword);
-          remaining = remaining.substring(len);
-          found = true;
-          break;
-        }
-      }
-
-      if (!found) {
-        const char = remaining[0];
-        if (this.encoder && this.encoder[char] !== undefined) {
-          tokens.push(char);
-        } else {
-          tokens.push("<unk>");
-        }
-        remaining = remaining.substring(1);
-      }
-    }
-
-    return tokens;
-  }
-
-  private encodeDefault(text: string): string[] {
-    return text.split("").map((char) => {
-      return this.encoder && this.encoder[char] !== undefined ? char : "<unk>";
-    });
   }
 
   tokenize(text: string): TokenizeResult {
-    if (!this.spModel) {
-      throw new Error("SentencePiece model not loaded");
+    if (!this.isLoaded || !this.tokenizer) {
+      throw new Error("Tokenizerが読み込まれていません");
     }
 
-    const tokens = this.spModel.encode(text);
-    const inputIds = tokens.map((token: string) => {
-      if (token in this.langTokenToId) {
-        return this.langTokenToId[token];
-      }
-      return (this.encoder && this.encoder[token]) || this.unkTokenId || 0;
-    });
+    try {
+      let encoded: number[];
 
-    return {
-      input_ids: [inputIds], // バッチ次元を追加
-    };
+      if (this.tokenizer.encode) {
+        // Transformers.jsのtokenizer
+        encoded = this.tokenizer.encode(text);
+      } else {
+        // SimpleBPETokenizer または HuggingFaceSentencePieceTokenizer
+        encoded = this.tokenizer.tokenize(text);
+      }
+
+      return {
+        input_ids: [Array.isArray(encoded) ? encoded : [encoded]],
+      };
+    } catch (error) {
+      console.error("トークン化エラー:", error);
+      throw new Error(`トークン化に失敗: ${error}`);
+    }
   }
 
   decode(tokenIds: number[], skipSpecialTokens = true): string {
-    if (!this.spModel || !this.decoder) {
-      throw new Error("Tokenizer not fully loaded");
+    if (!this.isLoaded || !this.tokenizer) {
+      throw new Error("Tokenizerが読み込まれていません");
     }
 
-    const tokens = tokenIds
-      .map((id) => {
-        // 言語トークンをスキップ
-        if (id in this.idToLangToken) {
-          return skipSpecialTokens ? "" : this.idToLangToken[id];
-        }
+    try {
+      if (this.tokenizer.decode) {
+        // Transformers.jsのtokenizer または カスタムtokenizer
+        return this.tokenizer.decode(tokenIds, skipSpecialTokens);
+      }
+      return "";
+    } catch (error) {
+      console.error("デコードエラー:", error);
+      throw new Error(`デコードに失敗: ${error}`);
+    }
+  }
 
-        // 特殊トークンをスキップ
-        const token = this.decoder![id];
-        if (!token) {
-          return "";
-        }
+  get decoderStartToken(): number | null {
+    if (!this.tokenizer) return null;
+    return this.tokenizer.decoderStartToken || 2;
+  }
 
-        // 問題のあるトークンをフィルタリング
-        if (skipSpecialTokens) {
-          if (
-            token === "<pad>" ||
-            token === "<unk>" ||
-            token === "</s>" ||
-            token === "<s>"
-          ) {
-            return "";
-          }
-          // バッククォートのみのトークンをフィルタリング
-          if (token === "`" || token === "▁`" || token.trim() === "`") {
-            return "";
-          }
-        }
+  get eosToken(): number | null {
+    if (!this.tokenizer) return null;
+    return this.tokenizer.eosToken || 1;
+  }
 
-        return token;
-      })
-      .filter((token) => token !== "");
+  get padToken(): number | null {
+    if (!this.tokenizer) return null;
+    return this.tokenizer.padToken || 0;
+  }
 
-    const decodedText = this.spModel.decode(tokens);
+  get unkToken(): number | null {
+    if (!this.tokenizer) return null;
+    return this.tokenizer.unkToken || 3;
+  }
 
-    // 後処理でバッククォートの残骸を除去
-    return decodedText.replace(/`+/g, "").trim();
+  setDecoderStartTokenId(id: number): void {
+    if (this.tokenizer) {
+      this.tokenizer.decoderStartToken = id;
+    }
+  }
+
+  setEosTokenId(id: number): void {
+    if (this.tokenizer) {
+      this.tokenizer.eosToken = id;
+    }
+  }
+
+  getTokenString(id: number): string | null {
+    if (!this.tokenizer) return null;
+
+    try {
+      if (this.tokenizer.getTokenString) {
+        return this.tokenizer.getTokenString(id);
+      }
+      return this.tokenizer.decode([id]);
+    } catch (error) {
+      return null;
+    }
   }
 
   getLangToken(langCode: string): string {
@@ -435,36 +185,279 @@ export class SMALL100TokenizerJS {
   }
 
   getLangId(langCode: string): number | undefined {
-    return this.langCodeToId[langCode];
+    if (!this.tokenizer) return undefined;
+
+    const langToken = this.getLangToken(langCode);
+    if (this.tokenizer.encode) {
+      const encoded = this.tokenizer.encode(langToken);
+      return Array.isArray(encoded) ? encoded[0] : encoded;
+    }
+    return undefined;
+  }
+}
+
+// 簡易BPEトークナイザーの実装
+class SimpleBPETokenizer {
+  private vocab: Record<string, number> = {};
+  private decoder: Record<number, string> = {};
+  private merges: string[] = [];
+  private specialTokens: Record<string, number> = {};
+
+  constructor(config: any) {
+    if (config.model && config.model.vocab) {
+      this.vocab = config.model.vocab;
+
+      // decoderを作成
+      for (const [token, id] of Object.entries(this.vocab)) {
+        this.decoder[id as number] = token;
+      }
+    }
+
+    if (config.model && config.model.merges) {
+      this.merges = config.model.merges;
+    }
+
+    // 特殊トークンの設定
+    if (config.added_tokens) {
+      for (const tokenInfo of config.added_tokens) {
+        this.specialTokens[tokenInfo.content] = tokenInfo.id;
+      }
+    }
+
+    // デフォルトの特殊トークン
+    this.specialTokens["<pad>"] = this.specialTokens["<pad>"] || 0;
+    this.specialTokens["</s>"] = this.specialTokens["</s>"] || 1;
+    this.specialTokens["<s>"] = this.specialTokens["<s>"] || 2;
+    this.specialTokens["<unk>"] = this.specialTokens["<unk>"] || 3;
   }
 
-  // ゲッター
-  get decoderStartToken(): number | null {
-    return this.decoderStartTokenId;
+  tokenize(text: string): number[] {
+    // 簡易的なBPE実装
+    const tokens = this.bpeEncode(text);
+    return tokens.map(
+      (token) => this.vocab[token] || this.specialTokens["<unk>"] || 3
+    );
   }
 
-  get eosToken(): number | null {
-    return this.eosTokenId;
+  private bpeEncode(text: string): string[] {
+    // 基本的な前処理
+    const normalizedText = text.trim();
+    if (!normalizedText) return [];
+
+    // 文字レベルで開始
+    let tokens = normalizedText
+      .split("")
+      .map((char) => (char === " " ? "▁" : char));
+
+    // マージルールを適用
+    for (const merge of this.merges) {
+      const [first, second] = merge.split(" ");
+      if (!first || !second) continue;
+
+      const newTokens: string[] = [];
+      let i = 0;
+
+      while (i < tokens.length) {
+        if (
+          i < tokens.length - 1 &&
+          tokens[i] === first &&
+          tokens[i + 1] === second
+        ) {
+          newTokens.push(first + second);
+          i += 2;
+        } else {
+          newTokens.push(tokens[i]);
+          i++;
+        }
+      }
+
+      tokens = newTokens;
+    }
+
+    return tokens;
   }
 
-  get padToken(): number | null {
-    return this.padTokenId;
+  decode(tokenIds: number[], skipSpecialTokens = true): string {
+    const tokens = tokenIds
+      .map((id) => {
+        const token = this.decoder[id];
+        if (!token) return "";
+
+        if (
+          skipSpecialTokens &&
+          Object.values(this.specialTokens).includes(id)
+        ) {
+          return "";
+        }
+
+        return token;
+      })
+      .filter((token) => token !== "");
+
+    return tokens.join("").replace(/▁/g, " ").trim();
   }
 
-  get unkToken(): number | null {
-    return this.unkTokenId;
+  get decoderStartToken(): number {
+    return this.specialTokens["<s>"] || 2;
   }
 
-  // セッター
-  setDecoderStartTokenId(id: number): void {
-    this.decoderStartTokenId = id;
+  get eosToken(): number {
+    return this.specialTokens["</s>"] || 1;
   }
 
-  setEosTokenId(id: number): void {
-    this.eosTokenId = id;
+  get padToken(): number {
+    return this.specialTokens["<pad>"] || 0;
+  }
+
+  get unkToken(): number {
+    return this.specialTokens["<unk>"] || 3;
   }
 
   getTokenString(id: number): string | null {
-    return this.decoder ? this.decoder[id] || null : null;
+    return this.decoder[id] || null;
   }
 }
+
+// HuggingFace形式のSentencePieceトークナイザーの実装
+class HuggingFaceSentencePieceTokenizer {
+  private vocab: Record<string, number> = {};
+  private decoder: Record<number, string> = {};
+  private specialTokens: Record<string, number> = {};
+  private spModelBuffer: ArrayBuffer;
+  private config: any;
+
+  constructor(
+    vocab: Record<string, number>,
+    spModelBuffer: ArrayBuffer,
+    config: any
+  ) {
+    this.vocab = vocab;
+    this.spModelBuffer = spModelBuffer;
+    this.config = config;
+
+    // decoderを作成
+    for (const [token, id] of Object.entries(this.vocab)) {
+      this.decoder[id as number] = token;
+    }
+
+    // 特殊トークンの設定
+    this.setupSpecialTokens();
+  }
+
+  private setupSpecialTokens(): void {
+    // configから特殊トークンを取得
+    const specialTokensMap = this.config.special_tokens_map || {};
+
+    // よく使われる特殊トークン
+    this.specialTokens["<pad>"] = this.vocab["<pad>"] || 0;
+    this.specialTokens["</s>"] = this.vocab["</s>"] || 1;
+    this.specialTokens["<s>"] = this.vocab["<s>"] || 2;
+    this.specialTokens["<unk>"] = this.vocab["<unk>"] || 3;
+
+    // configで定義された特殊トークンを追加
+    for (const [tokenType, tokenValue] of Object.entries(specialTokensMap)) {
+      if (
+        typeof tokenValue === "string" &&
+        this.vocab[tokenValue] !== undefined
+      ) {
+        this.specialTokens[tokenValue] = this.vocab[tokenValue];
+      }
+    }
+  }
+
+  tokenize(text: string): number[] {
+    // 簡易的なSentencePiece実装
+    const tokens = this.sentencePieceEncode(text);
+    return tokens.map(
+      (token) => this.vocab[token] || this.specialTokens["<unk>"] || 3
+    );
+  }
+
+  private sentencePieceEncode(text: string): string[] {
+    // 基本的な前処理
+    const normalizedText = text.trim();
+    if (!normalizedText) return [];
+
+    // スペースを▁に置換（SentencePieceの標準）
+    const preprocessed = "▁" + normalizedText.replace(/ /g, "▁");
+
+    // 文字レベルで開始
+    let tokens = preprocessed.split("");
+
+    // 語彙にある最長マッチを探す
+    const result: string[] = [];
+    let i = 0;
+
+    while (i < tokens.length) {
+      let matched = false;
+
+      // 最長マッチを探す（最大10文字まで）
+      for (let len = Math.min(tokens.length - i, 10); len >= 1; len--) {
+        const candidate = tokens.slice(i, i + len).join("");
+        if (this.vocab[candidate] !== undefined) {
+          result.push(candidate);
+          i += len;
+          matched = true;
+          break;
+        }
+      }
+
+      if (!matched) {
+        // 単一文字もなければ<unk>
+        const char = tokens[i];
+        if (this.vocab[char] !== undefined) {
+          result.push(char);
+        } else {
+          result.push("<unk>");
+        }
+        i++;
+      }
+    }
+
+    return result;
+  }
+
+  decode(tokenIds: number[], skipSpecialTokens = true): string {
+    const tokens = tokenIds
+      .map((id) => {
+        const token = this.decoder[id];
+        if (!token) return "";
+
+        if (
+          skipSpecialTokens &&
+          Object.values(this.specialTokens).includes(id)
+        ) {
+          return "";
+        }
+
+        return token;
+      })
+      .filter((token) => token !== "");
+
+    // SentencePieceの▁をスペースに戻す
+    return tokens.join("").replace(/▁/g, " ").trim();
+  }
+
+  get decoderStartToken(): number {
+    return this.specialTokens["<s>"] || 2;
+  }
+
+  get eosToken(): number {
+    return this.specialTokens["</s>"] || 1;
+  }
+
+  get padToken(): number {
+    return this.specialTokens["<pad>"] || 0;
+  }
+
+  get unkToken(): number {
+    return this.specialTokens["<unk>"] || 3;
+  }
+
+  getTokenString(id: number): string | null {
+    return this.decoder[id] || null;
+  }
+}
+
+// 後方互換性のためのエイリアス
+export const SMALL100TokenizerJS = HuggingFaceTokenizer;
