@@ -193,7 +193,18 @@ export class SMALL100TokenizerJS {
         return this.encodeBPE(text);
       },
       decode: (tokens: string[]) => {
-        return tokens.join("").replace(/▁/g, " ").trim();
+        // バッククォートやその他の問題のあるトークンを除去
+        const cleanTokens = tokens.filter((token) => {
+          // 空文字や問題のあるトークンをフィルタリング
+          if (!token || token.trim() === "") return false;
+          if (token === "`" || token === "▁`") return false;
+          if (token.includes("`") && token.trim().length <= 2) return false;
+          return true;
+        });
+
+        const decoded = cleanTokens.join("").replace(/▁/g, " ");
+        // 最終的にバッククォートの残骸を除去
+        return decoded.replace(/`+/g, "").trim();
       },
     };
   }
@@ -382,14 +393,41 @@ export class SMALL100TokenizerJS {
 
     const tokens = tokenIds
       .map((id) => {
+        // 言語トークンをスキップ
         if (id in this.idToLangToken) {
           return skipSpecialTokens ? "" : this.idToLangToken[id];
         }
-        return this.decoder![id] || "<unk>";
+
+        // 特殊トークンをスキップ
+        const token = this.decoder![id];
+        if (!token) {
+          return "";
+        }
+
+        // 問題のあるトークンをフィルタリング
+        if (skipSpecialTokens) {
+          if (
+            token === "<pad>" ||
+            token === "<unk>" ||
+            token === "</s>" ||
+            token === "<s>"
+          ) {
+            return "";
+          }
+          // バッククォートのみのトークンをフィルタリング
+          if (token === "`" || token === "▁`" || token.trim() === "`") {
+            return "";
+          }
+        }
+
+        return token;
       })
       .filter((token) => token !== "");
 
-    return this.spModel.decode(tokens);
+    const decodedText = this.spModel.decode(tokens);
+
+    // 後処理でバッククォートの残骸を除去
+    return decodedText.replace(/`+/g, "").trim();
   }
 
   getLangToken(langCode: string): string {
@@ -424,5 +462,9 @@ export class SMALL100TokenizerJS {
 
   setEosTokenId(id: number): void {
     this.eosTokenId = id;
+  }
+
+  getTokenString(id: number): string | null {
+    return this.decoder ? this.decoder[id] || null : null;
   }
 }

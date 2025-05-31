@@ -255,6 +255,21 @@ export class TranslationSystem {
         const lastTokenLogits = logits.slice(-vocabSize);
         const nextTokenId = this.argmax(lastTokenLogits);
 
+        // 異常なトークンIDをチェック
+        if (nextTokenId < 0 || nextTokenId >= vocabSize) {
+          console.warn(
+            `異常なトークンID検出: ${nextTokenId}, 語彙サイズ: ${vocabSize}`
+          );
+          break;
+        }
+
+        // デバッグ用: 生成されたトークンをログ出力
+        const tokenStr =
+          this.tokenizer.getTokenString(nextTokenId) || "<unknown>";
+        console.log(
+          `生成トークン ${step}: ID=${nextTokenId}, Token="${tokenStr}"`
+        );
+
         generatedIds.push(nextTokenId);
 
         // EOSトークンで終了
