@@ -7,9 +7,10 @@ export class ModelDownloader {
 
   constructor(baseUrl?: string, files?: ModelFile[]) {
     this.baseUrl =
-      baseUrl || "https://huggingface.co/alirezamsh/small100/resolve/main/";
+      baseUrl ||
+      "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/";
     this.files = files || [
-      { name: "model.onnx", size: "~824MB" }, // alirezamsh/small100 の model.onnx は約824MB
+      { name: "model.onnx", size: "~824MB" }, // fukayatti0/small100-quantized-int8 の model.onnx は約824MB
       { name: "vocab.json", size: "~3.5MB" },
       { name: "sentencepiece.bpe.model", size: "~4MB" }, // SentencePieceモデルファイル
       { name: "config.json", size: "~1KB" },

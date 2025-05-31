@@ -40,18 +40,18 @@ VOCAB_FILES_NAMES = {
 
 PRETRAINED_VOCAB_FILES_MAP = {
     "vocab_file": {
-        "alirezamsh/small100": "https://huggingface.co/alirezamsh/small100/resolve/main/vocab.json",
+        "fukayatti0/small100-quantized-int8": "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/vocab.json",
     },
     "spm_file": {
-        "alirezamsh/small100": "https://huggingface.co/alirezamsh/small100/resolve/main/sentencepiece.bpe.model",
+        "fukayatti0/small100-quantized-int8": "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/sentencepiece.bpe.model",
     },
     "tokenizer_config_file": {
-        "alirezamsh/small100": "https://huggingface.co/alirezamsh/small100/resolve/main/tokenizer_config.json",
+        "fukayatti0/small100-quantized-int8": "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/tokenizer_config.json",
     },
 }
 
 PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES = {
-    "alirezamsh/small100": 1024,
+    "fukayatti0/small100-quantized-int8": 1024,
 }
 
 # fmt: off
@@ -102,7 +102,7 @@ class SMALL100Tokenizer(PreTrainedTokenizer):
     Examples:
     ```python
     >>> from tokenization_small100 import SMALL100Tokenizer
-    >>> tokenizer = SMALL100Tokenizer.from_pretrained("alirezamsh/small100", tgt_lang="ro")
+    >>> tokenizer = SMALL100Tokenizer.from_pretrained("fukayatti0/small100-quantized-int8", tgt_lang="ro")
     >>> src_text = " UN Chief Says There Is No Military Solution in Syria"
     >>> tgt_text = "Şeful ONU declară că nu există o soluţie militară în Siria"
     >>> model_inputs = tokenizer(src_text, text_target=tgt_text, return_tensors="pt")

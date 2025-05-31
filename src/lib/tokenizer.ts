@@ -265,7 +265,7 @@ export class SMALL100Tokenizer {
   }
 
   async loadFromPretrained(
-    repoId = "alirezamsh/small100",
+    repoId = "fukayatti0/small100-quantized-int8",
     tgtLang = "en"
   ): Promise<void> {
     try {
@@ -652,7 +652,7 @@ export class HuggingFaceTokenizer extends SMALL100Tokenizer {
   private isLoaded = false;
 
   async loadFromPretrained(
-    repoId = "alirezamsh/small100",
+    repoId = "fukayatti0/small100-quantized-int8",
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _filename = "tokenizer.json" // このパラメータは無視される
   ): Promise<void> {

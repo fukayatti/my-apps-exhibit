@@ -202,7 +202,7 @@ export function TranslationApp() {
           <div className="bg-gray-50 p-4 rounded-md mb-4">
             <strong>SMALL-100 多言語翻訳モデル (8bit量子化版)</strong>
             <br />
-            リポジトリ: alirezamsh/small100
+            リポジトリ: fukayatti0/small100-quantized-int8
             <br />
             サイズ: 約200MB（4ファイル合計）
             <br />
