@@ -1,178 +1,124 @@
 import { FileStatus } from "./types";
 
 export class ModelStorage {
-  private dbName = "TranslationModelDB";
-  private dbVersion = 1;
-  private storeName = "models";
-  private db: IDBDatabase | null = null;
+  private models: Map<
+    string,
+    { buffer: ArrayBuffer; timestamp: number; size: number }
+  > = new Map();
+  private initialized = false;
 
-  async init(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
-
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        this.db = request.result;
-        resolve(this.db);
-      };
-
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(this.storeName)) {
-          const store = db.createObjectStore(this.storeName, {
-            keyPath: "filename",
-          });
-          store.createIndex("filename", "filename", { unique: true });
-        }
-      };
-    });
+  async init(): Promise<void> {
+    if (!this.initialized) {
+      this.models = new Map();
+      this.initialized = true;
+      console.log("[ModelStorage] In-memory storage initialized.");
+    }
+    return Promise.resolve();
   }
 
   async saveModel(
     filename: string,
-    buffer: ArrayBuffer,
-    metadata: Record<string, unknown> = {}
-  ): Promise<IDBValidKey> {
-    if (!this.db) throw new Error("Database not initialized");
+    buffer: ArrayBuffer
+    // metadata: Record<string, unknown> = {} // metadata は現状未使用のためコメントアウト
+  ): Promise<string> {
+    // IDBValidKey から string に変更 (ファイル名を返す)
+    if (!this.initialized) await this.init();
 
-    const transaction = this.db.transaction([this.storeName], "readwrite");
-    const store = transaction.objectStore(this.storeName);
-
-    const modelData = {
-      filename: filename,
-      data: buffer,
+    this.models.set(filename, {
+      buffer: buffer,
       timestamp: Date.now(),
       size: buffer.byteLength,
-      ...metadata,
-    };
-
-    return new Promise((resolve, reject) => {
-      const request = store.put(modelData);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      // ...metadata, // metadata は現状未使用
     });
+    console.log(
+      `[ModelStorage] Saved ${filename} to memory. Size: ${buffer.byteLength}`
+    );
+    return Promise.resolve(filename);
   }
 
   async getModel(filename: string): Promise<ArrayBuffer | null> {
-    if (!this.db) throw new Error("Database not initialized");
+    if (!this.initialized) await this.init();
 
-    const transaction = this.db.transaction([this.storeName], "readonly");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.get(filename);
-      request.onsuccess = () => {
-        const result = request.result;
-        resolve(result ? result.data : null);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    const modelData = this.models.get(filename);
+    if (modelData) {
+      console.log(`[ModelStorage] Retrieved ${filename} from memory.`);
+      return Promise.resolve(modelData.buffer);
+    }
+    console.log(`[ModelStorage] ${filename} not found in memory.`);
+    return Promise.resolve(null);
   }
 
   async hasModel(filename: string): Promise<boolean> {
-    if (!this.db) throw new Error("Database not initialized");
-
-    const transaction = this.db.transaction([this.storeName], "readonly");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.get(filename);
-      request.onsuccess = () => resolve(!!request.result);
-      request.onerror = () => reject(request.error);
-    });
+    if (!this.initialized) await this.init();
+    const exists = this.models.has(filename);
+    console.log(
+      `[ModelStorage] Check if ${filename} exists in memory: ${exists}`
+    );
+    return Promise.resolve(exists);
   }
 
   async getModelInfo(filename: string): Promise<FileStatus | null> {
-    if (!this.db) throw new Error("Database not initialized");
+    if (!this.initialized) await this.init();
 
-    const transaction = this.db.transaction([this.storeName], "readonly");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.get(filename);
-      request.onsuccess = () => {
-        const result = request.result;
-        if (result) {
-          resolve({
-            filename: result.filename,
-            size: result.size,
-            timestamp: result.timestamp,
-          });
-        } else {
-          resolve(null);
-        }
+    const modelData = this.models.get(filename);
+    if (modelData) {
+      const fileStatus: FileStatus = {
+        filename: filename,
+        size: modelData.size,
+        timestamp: modelData.timestamp,
       };
-      request.onerror = () => reject(request.error);
-    });
+      console.log(
+        `[ModelStorage] Retrieved info for ${filename} from memory:`,
+        fileStatus
+      );
+      return Promise.resolve(fileStatus);
+    }
+    console.log(`[ModelStorage] Info for ${filename} not found in memory.`);
+    return Promise.resolve(null);
   }
 
-  async getAllModelInfo(): Promise<FileStatus[]> {
-    if (!this.db) throw new Error("Database not initialized");
-
-    const transaction = this.db.transaction([this.storeName], "readonly");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.getAll();
-      request.onsuccess = () => {
-        const results = request.result.map(
-          (item: { filename: string; size: number; timestamp: number }) => ({
-            filename: item.filename,
-            size: item.size,
-            timestamp: item.timestamp,
-          })
-        );
-        resolve(results);
-      };
-      request.onerror = () => reject(request.error);
-    });
-  }
+  // getAllModelInfo は getAllFilesInfo と機能が重複するため削除
+  // async getAllModelInfo(): Promise<FileStatus[]> {
+  //   // ...
+  // }
 
   async getAllFilesInfo(): Promise<FileStatus[]> {
-    if (!this.db) throw new Error("Database not initialized");
+    if (!this.initialized) await this.init();
 
-    const transaction = this.db.transaction([this.storeName], "readonly");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.getAll();
-      request.onsuccess = () => {
-        const results = request.result.map(
-          (item: { filename: string; size: number; timestamp: number }) => ({
-            filename: item.filename,
-            size: item.size,
-            timestamp: item.timestamp,
-          })
-        );
-        resolve(results);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    const filesInfo: FileStatus[] = [];
+    for (const [filename, data] of this.models.entries()) {
+      filesInfo.push({
+        filename: filename,
+        size: data.size,
+        timestamp: data.timestamp,
+      });
+    }
+    console.log(
+      "[ModelStorage] Retrieved info for all files in memory:",
+      filesInfo
+    );
+    return Promise.resolve(filesInfo);
   }
 
   async deleteModel(filename: string): Promise<boolean> {
-    if (!this.db) throw new Error("Database not initialized");
+    if (!this.initialized) await this.init();
 
-    const transaction = this.db.transaction([this.storeName], "readwrite");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.delete(filename);
-      request.onsuccess = () => resolve(true);
-      request.onerror = () => reject(request.error);
-    });
+    const deleted = this.models.delete(filename);
+    if (deleted) {
+      console.log(`[ModelStorage] Deleted ${filename} from memory.`);
+    } else {
+      console.log(
+        `[ModelStorage] ${filename} not found in memory, nothing to delete.`
+      );
+    }
+    return Promise.resolve(deleted);
   }
 
   async clearAll(): Promise<boolean> {
-    if (!this.db) throw new Error("Database not initialized");
+    if (!this.initialized) await this.init();
 
-    const transaction = this.db.transaction([this.storeName], "readwrite");
-    const store = transaction.objectStore(this.storeName);
-
-    return new Promise((resolve, reject) => {
-      const request = store.clear();
-      request.onsuccess = () => resolve(true);
-      request.onerror = () => reject(request.error);
-    });
+    this.models.clear();
+    console.log("[ModelStorage] Cleared all models from memory.");
+    return Promise.resolve(true);
   }
 }

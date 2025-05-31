@@ -159,9 +159,9 @@ export class TranslationSystem {
       // キャッシュされたモデルをチェック
       const requiredFiles = [
         "model.onnx",
-        "vocab.json",
-        "tokenizer_config.json",
+        "tokenizer.json", // vocab.json と tokenizer_config.json の代わりに tokenizer.json を使用
         "config.json",
+        "tokenizer_config.json", // HuggingFaceTokenizer が補助的に参照する可能性があるため残す
       ];
       const files: Record<string, ArrayBuffer> = {};
       let allFilesExist = true;
@@ -215,13 +215,22 @@ export class TranslationSystem {
       // トークナイザーの初期化
       this.tokenizer = new HuggingFaceTokenizer();
 
-      // vocab.jsonとtokenizer_config.jsonからtokenizer.json形式を生成
-      const vocabBuffer = files["vocab.json"];
-      const tokenizerConfigBuffer = files["tokenizer_config.json"];
-
-      const tokenizerJsonBuffer = this.createTokenizerJson(
-        vocabBuffer,
-        tokenizerConfigBuffer
+      const tokenizerJsonBuffer = files["tokenizer.json"];
+      if (!tokenizerJsonBuffer) {
+        throw new Error(
+          "tokenizer.json がファイルキャッシュに見つかりません。"
+        );
+      }
+      // 必要であれば、tokenizer_config.json も HuggingFaceTokenizer に渡せるようにする
+      // 現状の loadFromBuffer は tokenizer.json のみを想定しているため、
+      // tokenizer_config.json の情報を tokenizer.json にマージするか、
+      // HuggingFaceTokenizer 側で別途読み込ませる必要があるかもしれない。
+      // transformers.js の AutoTokenizer.from_pretrained は tokenizer.json があればそれを優先する。
+      // tokenizer_config.json の情報は、主に special_tokens_map などだが、
+      // これらは tokenizer.json にも含まれることが多い。
+      // 今回はまず tokenizer.json のみで試す。
+      console.log(
+        "[TranslationSystem] tokenizer.json を使用してトークナイザーを初期化します。"
       );
       await this.tokenizer.loadFromBuffer(tokenizerJsonBuffer);
 
@@ -270,9 +279,9 @@ export class TranslationSystem {
 
     const requiredFiles = [
       "model.onnx",
-      "vocab.json",
-      "tokenizer_config.json",
+      "tokenizer.json", // vocab.json と tokenizer_config.json の代わりに tokenizer.json を使用
       "config.json",
+      "tokenizer_config.json", // HuggingFaceTokenizer が補助的に参照する可能性があるため残す
     ];
 
     let allFilesExist = true;
@@ -563,34 +572,51 @@ export class TranslationSystem {
             nextBeamsAccumulator.push(beam); // 完了したビームはそのまま次へ
             continue;
           }
+          console.log(
+            `[TranslationSystem][translate][BeamStep ${step}] Processing beam: tokens=${
+              beam.tokens
+            }, score=${beam.score.toFixed(4)}`
+          );
 
           feeds.decoder_input_ids = new ort.Tensor(
             "int64",
             BigInt64Array.from(beam.tokens.map(BigInt)),
             [1, beam.tokens.length]
           );
+          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Decoder input_ids: ${beam.tokens}`);
 
           const output = await this.session.run(feeds);
           const logits = output.logits.data as Float32Array;
+          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Logits shape: ${output.logits.dims.join(',')}, length: ${logits.length}`);
 
+          // Logitsの最後のトークンに対応する部分のみを取得
+          // Logitsの形状は [batch_size, sequence_length, vocab_size]
+          // ここでは batch_size = 1, sequence_length = beam.tokens.length
+          const vocabSize = this.config.vocab_size;
+          const sequenceLength = beam.tokens.length;
           const nextTokenLogits = logits.slice(
-            (beam.tokens.length - 1) * this.config.vocab_size,
-            beam.tokens.length * this.config.vocab_size
+            (sequenceLength - 1) * vocabSize,
+            sequenceLength * vocabSize
           );
+          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Next token logits (slice from ${(sequenceLength - 1) * vocabSize} to ${sequenceLength * vocabSize}, length ${nextTokenLogits.length}):`, nextTokenLogits.slice(0, 10));
 
           const probabilities = this.softmax(nextTokenLogits);
-          const topK = this.getTopK(probabilities, numBeams);
+          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Probabilities (sample):`, probabilities.slice(0, 10));
+          const topK = this.getTopK(probabilities, numBeams * 2); // 探索候補を少し増やす (numBeams * 2 程度)
+          // console.log(`[TranslationSystem][translate][BeamStep ${step}] Top K tokens:`, topK.map(t => ({id: t.index, prob: t.probability.toFixed(6)})));
 
           for (const { index: tokenId, probability } of topK) {
-            if (probability === 0) continue; // 確率0のトークンは無視
+            if (probability < 1e-9) continue; // ごくわずかな確率のトークンは無視 (log(0)対策)
 
             const newTokens = [...beam.tokens, tokenId];
-            const newScore = beam.score + Math.log(probability); // 対数確率
+            const newScore = beam.score + Math.log(probability);
+            // console.log(`[TranslationSystem][translate][BeamStep ${step}] Candidate: newTokens=${newTokens}, newScore=${newScore.toFixed(4)}, tokenId=${tokenId}, prob=${probability.toFixed(6)}`);
 
             if (
               tokenId === this.tokenizer.eosToken ||
               newTokens.length >= maxLength
             ) {
+              // console.log(`[TranslationSystem][translate][BeamStep ${step}] Completed sequence: tokens=${newTokens}, score=${newScore.toFixed(4)}, EOS=${tokenId === this.tokenizer.eosToken}, MaxLength=${newTokens.length >= maxLength}`);
               completedSequences.push({
                 tokens: newTokens,
                 score: newScore,
@@ -605,17 +631,30 @@ export class TranslationSystem {
             }
           }
         }
+        // console.log(`[TranslationSystem][translate][BeamStep ${step}] Next beams accumulator (before sort/slice):`, nextBeamsAccumulator.map(b => ({tokens: b.tokens, score:b.score.toFixed(4), completed: b.completed })));
 
         // ビームをスコアでソートし、上位numBeams個を保持 (未完了のものから優先)
-        nextBeamsAccumulator.sort((a, b) => b.score - a.score); // スコアで降順ソート
-        beams = nextBeamsAccumulator
-          .filter((b) => !b.completed)
-          .slice(0, numBeams);
+        nextBeamsAccumulator.sort((a, b) => b.score - a.score);
+
+        const activeBeams = nextBeamsAccumulator.filter((b) => !b.completed);
+        const newCompleted = nextBeamsAccumulator.filter((b) => b.completed);
+
+        // 新しく完了したシーケンスを追加 (重複はスコアで考慮されるはず)
+        completedSequences.push(...newCompleted);
+        // スコアでソートし、上位 N 個だけ保持するなどの枝刈りも有効
+        completedSequences.sort((a, b) => b.score - a.score);
+        // if (completedSequences.length > numBeams * 2) { // あまり多くなりすぎないように
+        //   completedSequences.splice(numBeams * 2);
+        // }
+
+        beams = activeBeams.slice(0, numBeams);
+        // console.log(`[TranslationSystem][translate][BeamStep ${step}] Updated beams:`, beams.map(b => ({tokens: b.tokens, score:b.score.toFixed(4)})));
+        // console.log(`[TranslationSystem][translate][BeamStep ${step}] Updated completedSequences (count: ${completedSequences.length}):`, completedSequences.slice(0, numBeams).map(s => ({tokens: s.tokens, score: s.score.toFixed(4)})));
 
         // 完了したシーケンスも保持しつつ、ビーム数を超えないように調整
         // completedSequencesもスコアでソートし、上位を保持するなどの戦略も考えられる
 
-        if (onProgress && step % 5 === 0) {
+        if (onProgress && (step % 5 === 0 || step === maxLength - 1)) {
           const progressInfo: StatusMessage = {
             type: "info",
             message: `推論中 (ステップ ${
@@ -788,159 +827,11 @@ export class TranslationSystem {
   //   return maxIndex;
   // }
 
-  private createTokenizerJson(
-    vocabBuffer: ArrayBuffer,
-    tokenizerConfigBuffer: ArrayBuffer
-  ): ArrayBuffer {
-    try {
-      // vocab.jsonとtokenizer_config.jsonを解析
-      const vocab = JSON.parse(new TextDecoder().decode(vocabBuffer));
-      const tokenizerConfig: TokenizerConfig = JSON.parse(
-        new TextDecoder().decode(tokenizerConfigBuffer)
-      );
-
-      // tokenizer.json形式を生成
-      const tokenizerJson = {
-        version: "1.0",
-        truncation: null,
-        padding: null,
-        added_tokens: [] as AddedToken[], // 型を指定
-        normalizer: {
-          // NLLB-200の一般的な設定
-          type: "Sequence",
-          normalizers: [
-            { type: "Prepend", prepend: " " },
-            { type: "Replace", pattern: { String: " " }, content: " " },
-          ],
-        },
-        pre_tokenizer: {
-          // NLLB-200の一般的な設定
-          type: "Metaspace",
-          replacement: " ",
-          add_prefix_space: true,
-          prepend_scheme: "always",
-        },
-        model: {
-          type: "BPE", // SentencePieceはBPEの一種として扱われることが多い
-          dropout: null,
-          unk_token: "<unk>", // tokenizerConfigから取得するべき
-          continuing_subword_prefix: null, // SentencePieceでは通常使用しない
-          end_of_word_suffix: null, // SentencePieceでは通常使用しない
-          fuse_unk: false,
-          byte_fallback: false, // SentencePieceでは通常使用しない
-          vocab: vocab,
-          merges: [], // SentencePieceの場合、マージルールは.modelファイル内。ここでは空
-        },
-        decoder: {
-          // NLLB-200の一般的な設定
-          type: "Metaspace",
-          replacement: " ",
-          add_prefix_space: true,
-          prepend_scheme: "always",
-        },
-        post_processor: null, // NLLB-200では通常シンプルなポストプロセス
-      };
-
-      // tokenizerConfigから情報をマージ
-      if (tokenizerConfig.added_tokens) {
-        tokenizerJson.added_tokens = tokenizerConfig.added_tokens;
-      }
-
-      if (tokenizerConfig.special_tokens_map) {
-        const specialTokensMap = tokenizerConfig.special_tokens_map;
-        const addedTokensMap = new Map<string, AddedToken>(
-          tokenizerJson.added_tokens.map((t) => [t.content, t])
-        );
-
-        for (const [, tokenValueObj] of Object.entries(specialTokensMap)) {
-          let tokenContent: string;
-          let tokenId: number | undefined = undefined;
-
-          if (typeof tokenValueObj === "string") {
-            tokenContent = tokenValueObj;
-          } else if (
-            typeof tokenValueObj === "object" &&
-            tokenValueObj.content
-          ) {
-            tokenContent = tokenValueObj.content;
-            tokenId = tokenValueObj.id; // idが提供されていれば使用
-          } else {
-            continue;
-          }
-
-          if (
-            vocab[tokenContent] !== undefined &&
-            !addedTokensMap.has(tokenContent)
-          ) {
-            addedTokensMap.set(tokenContent, {
-              id: tokenId ?? vocab[tokenContent], // idがなければvocabから
-              content: tokenContent,
-              single_word: false, // デフォルト値
-              lstrip: false, // デフォルト値
-              rstrip: false, // デフォルト値
-              normalized: false, // デフォルト値
-              special: true,
-            });
-          } else if (
-            addedTokensMap.has(tokenContent) &&
-            tokenId !== undefined
-          ) {
-            // 既存のトークンIDを更新 (もしあれば)
-            const existingToken = addedTokensMap.get(tokenContent);
-            if (existingToken && tokenId !== undefined)
-              existingToken.id = tokenId;
-          }
-        }
-        tokenizerJson.added_tokens = Array.from(addedTokensMap.values());
-      }
-
-      if (tokenizerConfig.unk_token) {
-        if (typeof tokenizerConfig.unk_token === "string") {
-          tokenizerJson.model.unk_token = tokenizerConfig.unk_token;
-        } else if (
-          typeof tokenizerConfig.unk_token === "object" &&
-          tokenizerConfig.unk_token.content
-        ) {
-          tokenizerJson.model.unk_token = tokenizerConfig.unk_token.content;
-        }
-      }
-
-      // 必須の特殊トークンがadded_tokensに含まれているか確認し、なければ追加
-      const ensureSpecialToken = (content: string, defaultId: number) => {
-        if (!tokenizerJson.added_tokens.some((t) => t.content === content)) {
-          tokenizerJson.added_tokens.push({
-            id: vocab[content] ?? defaultId,
-            content: content,
-            single_word: false,
-            lstrip: false,
-            rstrip: false,
-            normalized: false,
-            special: true,
-          } as AddedToken);
-        }
-      };
-
-      ensureSpecialToken("<pad>", 0);
-      ensureSpecialToken("</s>", 1);
-      ensureSpecialToken("<s>", 2);
-      ensureSpecialToken("<unk>", vocab[tokenizerJson.model.unk_token] ?? 3);
-
-      const tokenizerJsonString = JSON.stringify(tokenizerJson, null, 2);
-      const uint8Array = new TextEncoder().encode(tokenizerJsonString);
-      // uint8Array が指す範囲のデータをコピーして新しい ArrayBuffer を作成する
-      // これにより、元のバッファが SharedArrayBuffer であっても問題なく ArrayBuffer を取得できる
-      const newArrayBuffer = new ArrayBuffer(uint8Array.byteLength);
-      new Uint8Array(newArrayBuffer).set(
-        new Uint8Array(
-          uint8Array.buffer,
-          uint8Array.byteOffset,
-          uint8Array.byteLength
-        )
-      );
-      return newArrayBuffer;
-    } catch (error) {
-      console.error("tokenizer.json生成エラー:", error);
-      throw new Error(`tokenizer.json生成に失敗: ${error}`);
-    }
-  }
+  // createTokenizerJson メソッドは tokenizer.json を直接使用するため不要になった
+  // private createTokenizerJson(
+  //   vocabBuffer: ArrayBuffer,
+  //   tokenizerConfigBuffer: ArrayBuffer
+  // ): ArrayBuffer {
+  //   // ... (以前の実装)
+  // }
 }

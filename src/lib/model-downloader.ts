@@ -10,10 +10,11 @@ export class ModelDownloader {
       baseUrl ||
       "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/";
     this.files = files || [
-      { name: "model.onnx", size: "~150MB" },
+      { name: "model.onnx", size: "~824MB" }, // fukayatti0/small100-quantized-int8 の model.onnx は約824MB
       { name: "vocab.json", size: "~3.5MB" },
-      { name: "tokenizer_config.json", size: "~2KB" },
+      { name: "tokenizer.json", size: "~7MB" }, // fukayatti0/small100-quantized-int8 の tokenizer.json は約6.7MB
       { name: "config.json", size: "~1KB" },
+      { name: "tokenizer_config.json", size: "~2KB" },
     ];
   }
 
