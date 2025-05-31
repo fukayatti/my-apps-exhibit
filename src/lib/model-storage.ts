@@ -1,4 +1,4 @@
-import { ModelInfo, FileStatus } from "./types";
+import { FileStatus } from "./types";
 
 export class ModelStorage {
   private dbName = "TranslationModelDB";

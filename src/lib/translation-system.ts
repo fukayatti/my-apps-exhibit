@@ -609,10 +609,17 @@ export class TranslationSystem {
 
       const tokenizerJsonString = JSON.stringify(tokenizerJson, null, 2);
       const uint8Array = new TextEncoder().encode(tokenizerJsonString);
-      return uint8Array.buffer.slice(
-        uint8Array.byteOffset,
-        uint8Array.byteOffset + uint8Array.byteLength
+      // uint8Array が指す範囲のデータをコピーして新しい ArrayBuffer を作成する
+      // これにより、元のバッファが SharedArrayBuffer であっても問題なく ArrayBuffer を取得できる
+      const newArrayBuffer = new ArrayBuffer(uint8Array.byteLength);
+      new Uint8Array(newArrayBuffer).set(
+        new Uint8Array(
+          uint8Array.buffer,
+          uint8Array.byteOffset,
+          uint8Array.byteLength
+        )
       );
+      return newArrayBuffer;
     } catch (error) {
       console.error("tokenizer.json生成エラー:", error);
       throw new Error(`tokenizer.json生成に失敗: ${error}`);
