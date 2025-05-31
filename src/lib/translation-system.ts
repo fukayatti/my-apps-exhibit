@@ -430,17 +430,37 @@ export class TranslationSystem {
   }
 
   private softmax(array: Float32Array): Float32Array {
-    const maxLogit = Math.max(...Array.from(array));
+    if (array.length === 0) {
+      return new Float32Array(0);
+    }
+
+    let maxLogit = array[0];
+    for (let i = 1; i < array.length; i++) {
+      if (array[i] > maxLogit) {
+        maxLogit = array[i];
+      }
+    }
+
     const result = new Float32Array(array.length);
     let sumExps = 0;
 
-    // 最初にexpを計算してsumを求める
     for (let i = 0; i < array.length; i++) {
-      result[i] = Math.exp(array[i] - maxLogit);
-      sumExps += result[i];
+      const expVal = Math.exp(array[i] - maxLogit);
+      result[i] = expVal;
+      sumExps += expVal;
     }
 
-    // 正規化
+    // ゼロ除算やNaNを防ぐ
+    if (sumExps === 0 || !isFinite(sumExps)) {
+      // 全ての要素が同じ確率を持つようにフォールバック (あるいは他の戦略)
+      const fallbackValue = 1 / array.length;
+      for (let i = 0; i < result.length; i++) {
+        result[i] = fallbackValue;
+      }
+      // console.warn("Softmax sumExps is zero or not finite. Applied fallback distribution.");
+      return result;
+    }
+
     for (let i = 0; i < result.length; i++) {
       result[i] = result[i] / sumExps;
     }
