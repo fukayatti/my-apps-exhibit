@@ -117,6 +117,7 @@ class SimpleSentencePieceProcessor {
 
   constructor() {}
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async load(_modelData: ArrayBuffer): Promise<void> {
     // SentencePieceモデルファイルを解析する
     // 実際の実装では、プロトバッファの解析が必要だが、
@@ -602,13 +603,15 @@ export class HuggingFaceTokenizer extends SMALL100Tokenizer {
 
   async loadFromPretrained(
     repoId = "alirezamsh/small100",
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _filename = "tokenizer.json" // このパラメータは無視される
   ): Promise<void> {
     await super.loadFromPretrained(repoId);
     this.isLoaded = true;
   }
 
-  async loadFromBuffer(tokenizerBuffer: ArrayBuffer): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async loadFromBuffer(_tokenizerBuffer: ArrayBuffer): Promise<void> {
     // 新しい実装では使用しない
     throw new Error(
       "loadFromBufferは新しいSMALL100Tokenizer実装では非サポートです。loadFromBuffersを使用してください。"
