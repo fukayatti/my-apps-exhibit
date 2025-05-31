@@ -489,20 +489,51 @@ export class SMALL100Tokenizer {
     }
 
     try {
-      const tokens = tokenIds
-        .map((id) => {
-          const token = this.convertIdToToken(id);
+      console.log(
+        `[SMALL100Tokenizer][decode] 入力トークンIDs: [${tokenIds
+          .slice(0, 10)
+          .join(", ")}${tokenIds.length > 10 ? "..." : ""}] (長さ: ${
+          tokenIds.length
+        })`
+      );
 
-          // 特殊トークンをスキップするかチェック
-          if (skipSpecialTokens && this.isSpecialToken(token)) {
-            return "";
-          }
+      const tokens: string[] = [];
 
-          return token;
-        })
-        .filter((token) => token !== "");
+      for (const id of tokenIds) {
+        const token = this.convertIdToToken(id);
+        console.log(`[SMALL100Tokenizer][decode] ID ${id} -> Token "${token}"`);
 
-      return this.spModel.decode(tokens);
+        // 特殊トークンをスキップするかチェック
+        if (skipSpecialTokens && this.isSpecialToken(token)) {
+          console.log(
+            `[SMALL100Tokenizer][decode] 特殊トークンをスキップ: "${token}"`
+          );
+          continue;
+        }
+
+        if (token !== "" && token !== "<unk>") {
+          tokens.push(token);
+        }
+      }
+
+      console.log(
+        `[SMALL100Tokenizer][decode] フィルタ後のトークン: [${tokens
+          .slice(0, 10)
+          .join(", ")}${tokens.length > 10 ? "..." : ""}] (長さ: ${
+          tokens.length
+        })`
+      );
+
+      if (tokens.length === 0) {
+        console.warn(
+          "[SMALL100Tokenizer][decode] デコードするトークンがありません"
+        );
+        return "";
+      }
+
+      const result = this.spModel.decode(tokens);
+      console.log(`[SMALL100Tokenizer][decode] 最終結果: "${result}"`);
+      return result;
     } catch (error) {
       console.error("デコードエラー:", error);
       throw new Error(`デコードに失敗: ${error}`);
