@@ -117,7 +117,7 @@ class SimpleSentencePieceProcessor {
 
   constructor() {}
 
-  async load(modelData: ArrayBuffer): Promise<void> {
+  async load(_modelData: ArrayBuffer): Promise<void> {
     // SentencePieceモデルファイルを解析する
     // 実際の実装では、プロトバッファの解析が必要だが、
     // ここでは簡略化してvocab.jsonから構築する
@@ -366,8 +366,8 @@ export class SMALL100Tokenizer {
     this.setLangSpecialTokens(this._tgtLang);
   }
 
-  private updateSpecialTokensFromConfig(config: any): void {
-    if (config.bos_token) {
+  private updateSpecialTokensFromConfig(config: Record<string, unknown>): void {
+    if (config.bos_token && typeof config.bos_token === "string") {
       const bosId = this.encoder[config.bos_token];
       if (bosId !== undefined) {
         this.bosTokenId = bosId;
@@ -375,7 +375,7 @@ export class SMALL100Tokenizer {
       }
     }
 
-    if (config.eos_token) {
+    if (config.eos_token && typeof config.eos_token === "string") {
       const eosId = this.encoder[config.eos_token];
       if (eosId !== undefined) {
         this.eosTokenId = eosId;
@@ -383,7 +383,7 @@ export class SMALL100Tokenizer {
       }
     }
 
-    if (config.pad_token) {
+    if (config.pad_token && typeof config.pad_token === "string") {
       const padId = this.encoder[config.pad_token];
       if (padId !== undefined) {
         this.padTokenId = padId;
@@ -391,7 +391,7 @@ export class SMALL100Tokenizer {
       }
     }
 
-    if (config.unk_token) {
+    if (config.unk_token && typeof config.unk_token === "string") {
       const unkId = this.encoder[config.unk_token];
       if (unkId !== undefined) {
         this.unkTokenId = unkId;
@@ -602,7 +602,7 @@ export class HuggingFaceTokenizer extends SMALL100Tokenizer {
 
   async loadFromPretrained(
     repoId = "alirezamsh/small100",
-    filename = "tokenizer.json" // このパラメータは無視される
+    _filename = "tokenizer.json" // このパラメータは無視される
   ): Promise<void> {
     await super.loadFromPretrained(repoId);
     this.isLoaded = true;
