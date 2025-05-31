@@ -153,7 +153,7 @@ class SimpleSentencePieceProcessor {
   decode(tokens: string[] | number[]): string {
     let pieces: string[];
 
-    if (typeof tokens[0] === "number") {
+    if (tokens.length > 0 && typeof tokens[0] === "number") {
       pieces = (tokens as number[]).map(
         (id) => this.idToToken.get(id) || "<unk>"
       );
@@ -161,11 +161,30 @@ class SimpleSentencePieceProcessor {
       pieces = tokens as string[];
     }
 
+    console.log(
+      `[SimpleSentencePieceProcessor][decode] 入力pieces: [${pieces
+        .slice(0, 10)
+        .join(", ")}${pieces.length > 10 ? "..." : ""}]`
+    );
+
+    // 空のトークンや<unk>トークンを除外
+    const validPieces = pieces.filter((piece) => piece && piece !== "<unk>");
+
+    if (validPieces.length === 0) {
+      console.warn(
+        "[SimpleSentencePieceProcessor][decode] 有効なピースがありません"
+      );
+      return "";
+    }
+
     // SentencePieceの復号化
-    return pieces
+    const result = validPieces
       .join("")
       .replace(new RegExp(SPIECE_UNDERLINE, "g"), " ")
       .trim();
+
+    console.log(`[SimpleSentencePieceProcessor][decode] 結果: "${result}"`);
+    return result;
   }
 
   private normalize(text: string): string {
@@ -511,7 +530,7 @@ export class SMALL100Tokenizer {
           continue;
         }
 
-        if (token !== "" && token !== "<unk>") {
+        if (token !== "") {
           tokens.push(token);
         }
       }

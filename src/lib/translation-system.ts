@@ -942,10 +942,39 @@ export class TranslationSystem {
         console.log(`[TranslationSystem][translate] ${decodeMsg.message}`);
         onProgress(decodeMsg);
       }
+      console.log(
+        `[TranslationSystem][translate] デコード前のベストシーケンス: [${bestSequence
+          .slice(0, 20)
+          .join(", ")}${bestSequence.length > 20 ? "..." : ""}] (長さ: ${
+          bestSequence.length
+        })`
+      );
       const translatedText = this.tokenizer.decode(bestSequence, true);
       console.log(
         `[TranslationSystem][translate] 翻訳結果: "${translatedText}"`
       );
+
+      if (translatedText.trim() === "" || translatedText.includes(".....")) {
+        console.warn(
+          "[TranslationSystem][translate] 翻訳結果が空または無効です。skipSpecialTokens=falseで再試行..."
+        );
+        const fallbackText = this.tokenizer.decode(bestSequence, false);
+        console.log(
+          `[TranslationSystem][translate] フォールバック結果: "${fallbackText}"`
+        );
+        if (fallbackText.trim() !== "" && !fallbackText.includes(".....")) {
+          const cleanedText = fallbackText
+            .replace(/__[a-z]{2,3}__/g, "")
+            .replace(/<[^>]+>/g, "")
+            .trim();
+          if (cleanedText !== "") {
+            console.log(
+              `[TranslationSystem][translate] クリーニング後の結果: "${cleanedText}"`
+            );
+            return cleanedText;
+          }
+        }
+      }
 
       if (onProgress) {
         const successMsg: StatusMessage = {
