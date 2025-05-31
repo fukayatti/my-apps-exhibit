@@ -1,4 +1,4 @@
-import { ModelInfo } from "./types";
+import { ModelInfo, FileStatus } from "./types";
 
 export class ModelStorage {
   private dbName = "TranslationModelDB";
@@ -82,7 +82,7 @@ export class ModelStorage {
     });
   }
 
-  async getModelInfo(filename: string): Promise<ModelInfo | null> {
+  async getModelInfo(filename: string): Promise<FileStatus | null> {
     if (!this.db) throw new Error("Database not initialized");
 
     const transaction = this.db.transaction([this.storeName], "readonly");
@@ -106,7 +106,29 @@ export class ModelStorage {
     });
   }
 
-  async getAllModelInfo(): Promise<ModelInfo[]> {
+  async getAllModelInfo(): Promise<FileStatus[]> {
+    if (!this.db) throw new Error("Database not initialized");
+
+    const transaction = this.db.transaction([this.storeName], "readonly");
+    const store = transaction.objectStore(this.storeName);
+
+    return new Promise((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const results = request.result.map(
+          (item: { filename: string; size: number; timestamp: number }) => ({
+            filename: item.filename,
+            size: item.size,
+            timestamp: item.timestamp,
+          })
+        );
+        resolve(results);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async getAllFilesInfo(): Promise<FileStatus[]> {
     if (!this.db) throw new Error("Database not initialized");
 
     const transaction = this.db.transaction([this.storeName], "readonly");

@@ -8,7 +8,7 @@ import {
   ModelInfo,
   TokenizerConfig,
   AddedToken,
-  SpecialTokenMapValue,
+  FileStatus,
 } from "./types";
 
 export class TranslationSystem {
@@ -186,6 +186,71 @@ export class TranslationSystem {
     }
   }
 
+  async downloadAndLoadModel(
+    onStatusUpdate: (status: StatusMessage) => void,
+    onProgressUpdate: (progress: number) => void,
+    onFileProgress: (filename: string, progress: number) => void,
+    onFileComplete: (filename: string, size: number) => void
+  ): Promise<void> {
+    await this.initStorage();
+
+    // まずキャッシュをチェック
+    const requiredFiles = [
+      "model.onnx",
+      "vocab.json",
+      "tokenizer_config.json",
+      "config.json",
+    ];
+
+    let allFilesExist = true;
+    for (const fileName of requiredFiles) {
+      const fileBuffer = await this.storage.getModel(fileName);
+      if (!fileBuffer) {
+        allFilesExist = false;
+        break;
+      }
+    }
+
+    if (!allFilesExist) {
+      // ダウンロードが必要
+      onStatusUpdate({
+        type: "info",
+        message: "モデルファイルのダウンロードを開始します...",
+      });
+
+      const files = await this.downloader.downloadAllFiles(
+        (progress: number, currentFile: string, fileProgress: number) => {
+          onProgressUpdate(progress);
+          onFileProgress(currentFile, fileProgress);
+          onStatusUpdate({
+            type: "progress",
+            message: `ファイルダウンロード中: ${currentFile} (${Math.round(
+              fileProgress
+            )}%)`,
+            progress: progress,
+          });
+        },
+        (filename: string, size: number) => {
+          onFileComplete(filename, size);
+          onStatusUpdate({
+            type: "info",
+            message: `${filename} のダウンロード完了 (${Math.round(
+              size / 1024 / 1024
+            )}MB)`,
+          });
+        }
+      );
+
+      onStatusUpdate({ type: "info", message: "モデルファイルを保存中..." });
+      for (const [name, buffer] of Object.entries(files)) {
+        await this.storage.saveModel(name, buffer);
+      }
+    }
+
+    // モデルを読み込み
+    await this.loadModel(onStatusUpdate);
+  }
+
   async translate(
     text: string,
     sourceLang: string,
@@ -357,6 +422,11 @@ export class TranslationSystem {
     this.session = null;
     this.tokenizer = null;
     this.config = null;
+  }
+
+  async getCacheInfo(): Promise<FileStatus[]> {
+    await this.initStorage();
+    return this.storage.getAllFilesInfo();
   }
 
   private softmax(array: Float32Array): Float32Array {

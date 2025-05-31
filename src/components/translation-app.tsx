@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { TranslationSystem } from "@/lib/translation-system";
-import { StatusMessage, ModelFile, ModelInfo } from "@/lib/types";
-import { FileStatus } from "./file-status";
+import { StatusMessage, ModelFile, FileStatus } from "@/lib/types";
+import { FileStatus as FileStatusComponent } from "./file-status";
 import { ProgressBar } from "./progress-bar";
 import { StatusMessageComponent } from "./status-message";
 import { CacheManagement } from "./cache-management";
@@ -104,7 +104,11 @@ export function TranslationApp() {
     setStatus({ message: "翻訳中...", type: "loading" });
 
     try {
-      const result = await translationSystemRef.current.translate(inputText);
+      const result = await translationSystemRef.current.translate(
+        inputText,
+        "jpn",
+        "eng"
+      );
       setEnglishText(result);
       setStatus({ message: "翻訳が完了しました！", type: "success" });
     } catch (error) {
@@ -135,7 +139,7 @@ export function TranslationApp() {
     }
   };
 
-  const handleShowCacheInfo = async (): Promise<ModelInfo[]> => {
+  const handleShowCacheInfo = async (): Promise<FileStatus[]> => {
     if (!translationSystemRef.current) return [];
     return await translationSystemRef.current.getCacheInfo();
   };
@@ -203,7 +207,7 @@ export function TranslationApp() {
             isVisible={isDownloading || progress > 0}
           />
 
-          <FileStatus
+          <FileStatusComponent
             files={modelFiles}
             fileStatuses={fileStatuses}
             isVisible={showFileStatus}

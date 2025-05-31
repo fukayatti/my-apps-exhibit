@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ModelInfo } from "@/lib/types";
+import { FileStatus } from "@/lib/types";
 
 interface CacheManagementProps {
   isVisible: boolean;
   onClearCache: () => Promise<void>;
-  onShowCacheInfo: () => Promise<ModelInfo[]>;
+  onShowCacheInfo: () => Promise<FileStatus[]>;
 }
 
 export function CacheManagement({
@@ -14,7 +14,7 @@ export function CacheManagement({
   onClearCache,
   onShowCacheInfo,
 }: CacheManagementProps) {
-  const [cacheInfo, setCacheInfo] = useState<ModelInfo[] | null>(null);
+  const [cacheInfo, setCacheInfo] = useState<FileStatus[] | null>(null);
   const [showCacheInfo, setShowCacheInfo] = useState(false);
 
   if (!isVisible) return null;
