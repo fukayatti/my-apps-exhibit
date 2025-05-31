@@ -2,7 +2,14 @@ import * as ort from "onnxruntime-web";
 import { ModelStorage } from "./model-storage";
 import { ModelDownloader } from "./model-downloader";
 import { HuggingFaceTokenizer } from "./tokenizer";
-import { TranslationConfig, StatusMessage, ModelInfo } from "./types";
+import {
+  TranslationConfig,
+  StatusMessage,
+  ModelInfo,
+  TokenizerConfig,
+  AddedToken,
+  SpecialTokenMapValue,
+} from "./types";
 
 export class TranslationSystem {
   private session: ort.InferenceSession | null = null;
@@ -400,7 +407,7 @@ export class TranslationSystem {
     try {
       // vocab.jsonとtokenizer_config.jsonを解析
       const vocab = JSON.parse(new TextDecoder().decode(vocabBuffer));
-      const tokenizerConfig = JSON.parse(
+      const tokenizerConfig: TokenizerConfig = JSON.parse(
         new TextDecoder().decode(tokenizerConfigBuffer)
       );
 
@@ -409,9 +416,7 @@ export class TranslationSystem {
         version: "1.0",
         truncation: null,
         padding: null,
-        added_tokens: [
-          // デフォルトの特殊トークン。tokenizerConfigから上書きされる可能性あり
-        ],
+        added_tokens: [] as AddedToken[], // 型を指定
         normalizer: {
           // NLLB-200の一般的な設定
           type: "Sequence",
@@ -454,12 +459,9 @@ export class TranslationSystem {
       }
 
       if (tokenizerConfig.special_tokens_map) {
-        const specialTokensMap = tokenizerConfig.special_tokens_map as Record<
-          string,
-          string | { content: string; id: number }
-        >;
-        const addedTokensMap = new Map(
-          tokenizerJson.added_tokens.map((t) => [(t as any).content, t])
+        const specialTokensMap = tokenizerConfig.special_tokens_map;
+        const addedTokensMap = new Map<string, AddedToken>(
+          tokenizerJson.added_tokens.map((t) => [t.content, t])
         );
 
         for (const [, tokenValueObj] of Object.entries(specialTokensMap)) {
@@ -497,7 +499,8 @@ export class TranslationSystem {
           ) {
             // 既存のトークンIDを更新 (もしあれば)
             const existingToken = addedTokensMap.get(tokenContent);
-            if (existingToken) (existingToken as any).id = tokenId;
+            if (existingToken && tokenId !== undefined)
+              existingToken.id = tokenId;
           }
         }
         tokenizerJson.added_tokens = Array.from(addedTokensMap.values());
@@ -508,21 +511,15 @@ export class TranslationSystem {
           tokenizerJson.model.unk_token = tokenizerConfig.unk_token;
         } else if (
           typeof tokenizerConfig.unk_token === "object" &&
-          (tokenizerConfig.unk_token as any).content
+          tokenizerConfig.unk_token.content
         ) {
-          tokenizerJson.model.unk_token = (
-            tokenizerConfig.unk_token as any
-          ).content;
+          tokenizerJson.model.unk_token = tokenizerConfig.unk_token.content;
         }
       }
 
       // 必須の特殊トークンがadded_tokensに含まれているか確認し、なければ追加
       const ensureSpecialToken = (content: string, defaultId: number) => {
-        if (
-          !tokenizerJson.added_tokens.some(
-            (t) => (t as any).content === content
-          )
-        ) {
+        if (!tokenizerJson.added_tokens.some((t) => t.content === content)) {
           tokenizerJson.added_tokens.push({
             id: vocab[content] ?? defaultId,
             content: content,
@@ -531,7 +528,7 @@ export class TranslationSystem {
             rstrip: false,
             normalized: false,
             special: true,
-          } as any);
+          } as AddedToken);
         }
       };
 

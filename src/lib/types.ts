@@ -49,6 +49,7 @@ export interface TranslationConfig {
   // 他にもconfig.jsonに含まれる可能性のあるフィールドを追加
   model_type?: string;
   forced_bos_token_id?: number;
+  tokenizer?: TokenizerConfig; // 追加
 }
 
 export type StatusType = "loading" | "success" | "error" | "info" | "progress";
@@ -57,4 +58,42 @@ export interface StatusMessage {
   message: string;
   type: StatusType;
   progress?: number; // progressタイプのメッセージ用にオプションで追加
+}
+
+export interface AddedToken {
+  id: number;
+  content: string;
+  single_word?: boolean;
+  lstrip?: boolean;
+  rstrip?: boolean;
+  normalized?: boolean;
+  special?: boolean;
+}
+
+export interface SpecialTokenMapValueObject {
+  content: string;
+  id?: number;
+  single_word?: boolean;
+  lstrip?: boolean;
+  rstrip?: boolean;
+  normalized?: boolean;
+  special?: boolean;
+}
+
+export type SpecialTokenMapValue = string | SpecialTokenMapValueObject;
+
+export interface TokenizerConfig {
+  added_tokens?: AddedToken[];
+  special_tokens_map?: Record<string, SpecialTokenMapValue>;
+  unk_token?: SpecialTokenMapValue;
+  bos_token?: SpecialTokenMapValue;
+  eos_token?: SpecialTokenMapValue;
+  pad_token?: SpecialTokenMapValue;
+  cls_token?: SpecialTokenMapValue;
+  sep_token?: SpecialTokenMapValue;
+  mask_token?: SpecialTokenMapValue;
+  model_max_length?: number;
+  padding_side?: string;
+  truncation_side?: string;
+  clean_up_tokenization_spaces?: boolean;
 }
