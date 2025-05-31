@@ -1,7 +1,7 @@
 import * as ort from "onnxruntime-web";
 import { ModelStorage } from "./model-storage";
 import { ModelDownloader } from "./model-downloader";
-import { HuggingFaceTokenizer } from "./tokenizer";
+import { SMALL100Tokenizer } from "./tokenizer";
 import {
   TranslationConfig,
   StatusMessage,
@@ -13,7 +13,7 @@ import {
 
 export class TranslationSystem {
   private session: ort.InferenceSession | null = null;
-  private tokenizer: HuggingFaceTokenizer | null = null;
+  private tokenizer: SMALL100Tokenizer | null = null;
   private config: TranslationConfig | null = null;
   private isLoaded = false;
   private downloader: ModelDownloader;
@@ -159,9 +159,10 @@ export class TranslationSystem {
       // キャッシュされたモデルをチェック
       const requiredFiles = [
         "model.onnx",
-        "tokenizer.json", // vocab.json と tokenizer_config.json の代わりに tokenizer.json を使用
+        "vocab.json",
+        "sentencepiece.bpe.model",
         "config.json",
-        "tokenizer_config.json", // HuggingFaceTokenizer が補助的に参照する可能性があるため残す
+        "tokenizer_config.json",
       ];
       const files: Record<string, ArrayBuffer> = {};
       let allFilesExist = true;
@@ -213,26 +214,27 @@ export class TranslationSystem {
 
       onProgress({ type: "info", message: "トークナイザーを初期化中..." });
       // トークナイザーの初期化
-      this.tokenizer = new HuggingFaceTokenizer();
+      this.tokenizer = new SMALL100Tokenizer();
 
-      const tokenizerJsonBuffer = files["tokenizer.json"];
-      if (!tokenizerJsonBuffer) {
+      const vocabBuffer = files["vocab.json"];
+      const spModelBuffer = files["sentencepiece.bpe.model"];
+      const tokenizerConfigBuffer = files["tokenizer_config.json"];
+
+      if (!vocabBuffer) {
+        throw new Error("vocab.json がファイルキャッシュに見つかりません。");
+      }
+      if (!spModelBuffer) {
         throw new Error(
-          "tokenizer.json がファイルキャッシュに見つかりません。"
+          "sentencepiece.bpe.model がファイルキャッシュに見つかりません。"
         );
       }
-      // 必要であれば、tokenizer_config.json も HuggingFaceTokenizer に渡せるようにする
-      // 現状の loadFromBuffer は tokenizer.json のみを想定しているため、
-      // tokenizer_config.json の情報を tokenizer.json にマージするか、
-      // HuggingFaceTokenizer 側で別途読み込ませる必要があるかもしれない。
-      // transformers.js の AutoTokenizer.from_pretrained は tokenizer.json があればそれを優先する。
-      // tokenizer_config.json の情報は、主に special_tokens_map などだが、
-      // これらは tokenizer.json にも含まれることが多い。
-      // 今回はまず tokenizer.json のみで試す。
-      console.log(
-        "[TranslationSystem] tokenizer.json を使用してトークナイザーを初期化します。"
+
+      console.log("[TranslationSystem] SMALL100Tokenizer を初期化します。");
+      await this.tokenizer.loadFromBuffers(
+        vocabBuffer,
+        spModelBuffer,
+        tokenizerConfigBuffer
       );
-      await this.tokenizer.loadFromBuffer(tokenizerJsonBuffer);
 
       console.log("✓ トークナイザーの初期化完了");
       onProgress({ type: "info", message: "トークナイザーの初期化完了。" });
@@ -279,9 +281,10 @@ export class TranslationSystem {
 
     const requiredFiles = [
       "model.onnx",
-      "tokenizer.json", // vocab.json と tokenizer_config.json の代わりに tokenizer.json を使用
+      "vocab.json",
+      "sentencepiece.bpe.model",
       "config.json",
-      "tokenizer_config.json", // HuggingFaceTokenizer が補助的に参照する可能性があるため残す
+      "tokenizer_config.json",
     ];
 
     let allFilesExist = true;
