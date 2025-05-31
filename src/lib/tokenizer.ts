@@ -1,14 +1,5 @@
 import { TokenizeResult } from "./types";
-
-// Transformers.jsを動的にインポートするためのインターフェース
-interface TransformersModule {
-  AutoTokenizer: {
-    from_pretrained: (
-      modelName: string,
-      options?: Record<string, unknown>
-    ) => Promise<TokenizerInterface>;
-  };
-}
+import { ModelDownloader } from "./model-downloader";
 
 // トークナイザーのインターフェース
 interface TokenizerInterface {
@@ -31,52 +22,61 @@ interface TokenizerInterface {
 export class HuggingFaceTokenizer {
   private tokenizer: TokenizerInterface | null = null;
   private isLoaded = false;
-  private transformers: TransformersModule | null = null;
+  // private transformers: TransformersModule | null = null; // Transformers.jsは使用しない
 
-  async loadFromPretrained(modelPath: string): Promise<void> {
+  async loadFromPretrained(
+    repoId = "alirezamsh/small100",
+    filename = "tokenizer.json"
+  ): Promise<void> {
     try {
-      console.log("HuggingFace tokenizerを読み込み中...");
+      console.log(`tokenizer.json を ${repoId} から読み込み中...`);
 
-      // Transformers.jsを動的にインポート
-      this.transformers = (await import(
-        "@xenova/transformers"
-      )) as TransformersModule;
+      const downloader = new ModelDownloader(
+        `https://huggingface.co/${repoId}/resolve/main/`,
+        [{ name: filename, size: "unknown" }]
+      );
 
-      // AutoTokenizerを使用
-      this.tokenizer = await this.transformers.AutoTokenizer.from_pretrained(
-        modelPath,
-        {
-          cache_dir: "/.cache/huggingface",
-          local_files_only: false,
+      const tokenizerBuffer = await downloader.downloadFile(
+        filename,
+        (loaded, total) => {
+          const progress = total ? (loaded / total) * 100 : 0;
+          console.log(`tokenizer.json ダウンロード中: ${progress.toFixed(2)}%`);
         }
       );
 
-      this.isLoaded = true;
-      console.log("✓ HuggingFace tokenizerの読み込み完了");
-    } catch (error) {
-      console.error("Tokenizer読み込みエラー:", error);
-      throw new Error(`Tokenizerの読み込みに失敗: ${error}`);
-    }
-  }
-
-  async loadFromBuffer(tokenizerBuffer: ArrayBuffer): Promise<void> {
-    try {
-      console.log("tokenizer.jsonから読み込み中...");
-
-      // Transformers.jsを動的にインポート
-      this.transformers = (await import(
-        "@xenova/transformers"
-      )) as TransformersModule;
+      if (!tokenizerBuffer) {
+        throw new Error("tokenizer.json のダウンロードに失敗しました。");
+      }
 
       // tokenizer.jsonの内容を解析
       const tokenizerConfig = JSON.parse(
         new TextDecoder().decode(tokenizerBuffer)
       );
 
-      // 簡易的なBPEトークナイザーを実装
-      this.tokenizer = new SimpleBPETokenizer(tokenizerConfig);
+      // tokenizer.json形式のトークナイザーを実装
+      this.tokenizer = new TokenizerJsonProcessor(tokenizerConfig);
       this.isLoaded = true;
-      console.log("✓ tokenizer.jsonから読み込み完了");
+      console.log("✓ tokenizer.json からの読み込み完了");
+    } catch (error) {
+      console.error("Tokenizer読み込みエラー:", error);
+      throw new Error(`Tokenizerの読み込みに失敗: ${error}`);
+    }
+  }
+
+  // loadFromBuffer は tokenizer.json を直接読み込むため、用途に応じて残すか検討
+  async loadFromBuffer(tokenizerBuffer: ArrayBuffer): Promise<void> {
+    try {
+      console.log("生成されたtokenizer.jsonから読み込み中...");
+
+      // tokenizer.jsonの内容を解析
+      const tokenizerConfig = JSON.parse(
+        new TextDecoder().decode(tokenizerBuffer)
+      );
+
+      // tokenizer.json形式のトークナイザーを実装
+      this.tokenizer = new TokenizerJsonProcessor(tokenizerConfig);
+      this.isLoaded = true;
+      console.log("✓ tokenizer.jsonからの読み込み完了");
     } catch (error) {
       console.error("Tokenizer読み込みエラー:", error);
       throw new Error(`tokenizer.jsonの読み込みに失敗: ${error}`);
@@ -85,29 +85,36 @@ export class HuggingFaceTokenizer {
 
   async loadFromHuggingFaceFiles(
     vocabBuffer: ArrayBuffer,
-    spModelBuffer: ArrayBuffer,
+    spModelBuffer: ArrayBuffer, // 未使用だが互換性のために残す
     tokenizerConfigBuffer: ArrayBuffer
   ): Promise<void> {
     try {
-      console.log("HuggingFaceファイルから読み込み中...");
+      console.log(
+        "HuggingFaceファイルから読み込み中 (TokenizerJsonProcessorを使用)..."
+      );
 
       // vocab.jsonを解析
       const vocab = JSON.parse(new TextDecoder().decode(vocabBuffer));
 
       // tokenizer_config.jsonを解析
-      const tokenizerConfig = JSON.parse(
+      const tokenizerConfigData = JSON.parse(
         new TextDecoder().decode(tokenizerConfigBuffer)
       );
 
-      // SentencePieceモデルをHuggingFaceSentencePieceTokenizerで処理
-      this.tokenizer = new HuggingFaceSentencePieceTokenizer(
-        vocab,
-        spModelBuffer,
-        tokenizerConfig
-      );
+      // TokenizerJsonProcessorが必要とする形式に変換
+      const tokenizerJson = {
+        model: { vocab },
+        added_tokens: tokenizerConfigData.added_tokens || [],
+        special_tokens_map: tokenizerConfigData.special_tokens_map || {},
+        // 他の必要なフィールドもtokenizer_config.jsonからマッピングする
+      };
+
+      this.tokenizer = new TokenizerJsonProcessor(tokenizerJson);
 
       this.isLoaded = true;
-      console.log("✓ HuggingFaceファイルから読み込み完了");
+      console.log(
+        "✓ HuggingFaceファイルからの読み込み完了 (TokenizerJsonProcessor)"
+      );
     } catch (error) {
       console.error("Tokenizer読み込みエラー:", error);
       throw new Error(`HuggingFaceファイルの読み込みに失敗: ${error}`);
@@ -123,10 +130,8 @@ export class HuggingFaceTokenizer {
       let encoded: number[];
 
       if (this.tokenizer.encode) {
-        // Transformers.jsのtokenizer
         encoded = this.tokenizer.encode(text);
       } else if (this.tokenizer.tokenize) {
-        // SimpleBPETokenizer または HuggingFaceSentencePieceTokenizer
         encoded = this.tokenizer.tokenize(text);
       } else {
         throw new Error("トークナイザーメソッドが見つかりません");
@@ -148,7 +153,6 @@ export class HuggingFaceTokenizer {
 
     try {
       if (this.tokenizer.decode) {
-        // Transformers.jsのtokenizer または カスタムtokenizer
         return this.tokenizer.decode(tokenIds, {
           skip_special_tokens: skipSpecialTokens,
         });
@@ -221,20 +225,31 @@ export class HuggingFaceTokenizer {
   }
 }
 
-// 簡易BPEトークナイザーの実装
-class SimpleBPETokenizer implements TokenizerInterface {
+// tokenizer.json形式を処理するクラス
+class TokenizerJsonProcessor implements TokenizerInterface {
   private vocab: Record<string, number> = {};
   private decoder: Record<number, string> = {};
-  private merges: string[] = [];
   private specialTokens: Record<string, number> = {};
+  private config: Record<string, unknown>;
+  private addedTokens: Array<{
+    id: number;
+    content: string;
+    special: boolean;
+  }> = [];
 
   constructor(config: Record<string, unknown>) {
+    this.config = config;
+    this.processConfig();
+  }
+
+  private processConfig(): void {
+    // modelセクションからvocabを取得
     if (
-      config.model &&
-      typeof config.model === "object" &&
-      config.model !== null
+      this.config.model &&
+      typeof this.config.model === "object" &&
+      this.config.model !== null
     ) {
-      const model = config.model as Record<string, unknown>;
+      const model = this.config.model as Record<string, unknown>;
       if (model.vocab && typeof model.vocab === "object") {
         this.vocab = model.vocab as Record<string, number>;
 
@@ -243,32 +258,55 @@ class SimpleBPETokenizer implements TokenizerInterface {
           this.decoder[id as number] = token;
         }
       }
-
-      if (model.merges && Array.isArray(model.merges)) {
-        this.merges = model.merges as string[];
-      }
     }
 
-    // 特殊トークンの設定
-    if (config.added_tokens && Array.isArray(config.added_tokens)) {
-      for (const tokenInfo of config.added_tokens) {
+    // added_tokensから特殊トークンを取得
+    if (this.config.added_tokens && Array.isArray(this.config.added_tokens)) {
+      for (const tokenInfo of this.config.added_tokens) {
         if (typeof tokenInfo === "object" && tokenInfo !== null) {
-          const token = tokenInfo as Record<string, unknown>;
-          if (
-            typeof token.content === "string" &&
-            typeof token.id === "number"
-          ) {
+          const token = tokenInfo as {
+            id: number;
+            content: string;
+            special: boolean;
+          };
+          this.addedTokens.push(token);
+          if (token.special) {
             this.specialTokens[token.content] = token.id;
           }
         }
       }
     }
 
-    // デフォルトの特殊トークン
-    this.specialTokens["<pad>"] = this.specialTokens["<pad>"] || 0;
-    this.specialTokens["</s>"] = this.specialTokens["</s>"] || 1;
-    this.specialTokens["<s>"] = this.specialTokens["<s>"] || 2;
-    this.specialTokens["<unk>"] = this.specialTokens["<unk>"] || 3;
+    // special_tokens_mapからも取得 (フォールバックまたは補完)
+    if (
+      this.config.special_tokens_map &&
+      typeof this.config.special_tokens_map === "object" &&
+      this.config.special_tokens_map !== null
+    ) {
+      const specialTokensMap = this.config.special_tokens_map as Record<
+        string,
+        string
+      >;
+      for (const tokenName in specialTokensMap) {
+        const tokenContent = specialTokensMap[tokenName];
+        if (
+          this.vocab[tokenContent] !== undefined &&
+          this.specialTokens[tokenContent] === undefined
+        ) {
+          this.specialTokens[tokenContent] = this.vocab[tokenContent];
+        }
+      }
+    }
+
+    // デフォルトの特殊トークン（フォールバック）
+    this.specialTokens["<pad>"] =
+      this.specialTokens["<pad>"] ?? this.vocab["<pad>"] ?? 0;
+    this.specialTokens["</s>"] =
+      this.specialTokens["</s>"] ?? this.vocab["</s>"] ?? 1;
+    this.specialTokens["<s>"] =
+      this.specialTokens["<s>"] ?? this.vocab["<s>"] ?? 2;
+    this.specialTokens["<unk>"] =
+      this.specialTokens["<unk>"] ?? this.vocab["<unk>"] ?? 3;
   }
 
   encode(text: string): number[] {
@@ -276,179 +314,33 @@ class SimpleBPETokenizer implements TokenizerInterface {
   }
 
   tokenize(text: string): number[] {
-    // 簡易的なBPE実装
-    const tokens = this.bpeEncode(text);
+    // 正規化とプリトークン化
+    const normalizedText = this.normalize(text);
+    const tokens = this.preTokenize(normalizedText);
+
+    // 語彙との照合
     return tokens.map(
       (token) => this.vocab[token] || this.specialTokens["<unk>"] || 3
     );
   }
 
-  private bpeEncode(text: string): string[] {
-    // 基本的な前処理
-    const normalizedText = text.trim();
-    if (!normalizedText) return [];
-
-    // 文字レベルで開始
-    const tokens = normalizedText
-      .split("")
-      .map((char) => (char === " " ? "▁" : char));
-
-    // マージルールを適用
-    for (const merge of this.merges) {
-      const [first, second] = merge.split(" ");
-      if (!first || !second) continue;
-
-      const newTokens: string[] = [];
-      let i = 0;
-
-      while (i < tokens.length) {
-        if (
-          i < tokens.length - 1 &&
-          tokens[i] === first &&
-          tokens[i + 1] === second
-        ) {
-          newTokens.push(first + second);
-          i += 2;
-        } else {
-          newTokens.push(tokens[i]);
-          i++;
-        }
-      }
-
-      tokens.splice(0, tokens.length, ...newTokens);
-    }
-
-    return tokens;
+  private normalize(text: string): string {
+    //  をプレフィックスとして追加し、スペースを に置換
+    return " " + text.replace(/ /g, " ");
   }
 
-  decode(
-    tokenIds: number[],
-    options?: { skip_special_tokens?: boolean }
-  ): string {
-    const skipSpecialTokens = options?.skip_special_tokens ?? true;
-    const tokens = tokenIds
-      .map((id) => {
-        const token = this.decoder[id];
-        if (!token) return "";
-
-        if (
-          skipSpecialTokens &&
-          Object.values(this.specialTokens).includes(id)
-        ) {
-          return "";
-        }
-
-        return token;
-      })
-      .filter((token) => token !== "");
-
-    return tokens.join("").replace(/▁/g, " ").trim();
-  }
-
-  get decoderStartToken(): number {
-    return this.specialTokens["<s>"] || 2;
-  }
-
-  get eosToken(): number {
-    return this.specialTokens["</s>"] || 1;
-  }
-
-  get padToken(): number {
-    return this.specialTokens["<pad>"] || 0;
-  }
-
-  get unkToken(): number {
-    return this.specialTokens["<unk>"] || 3;
-  }
-
-  getTokenString(id: number): string | null {
-    return this.decoder[id] || null;
-  }
-}
-
-// HuggingFace形式のSentencePieceトークナイザーの実装
-class HuggingFaceSentencePieceTokenizer implements TokenizerInterface {
-  private vocab: Record<string, number> = {};
-  private decoder: Record<number, string> = {};
-  private specialTokens: Record<string, number> = {};
-  private spModelBuffer: ArrayBuffer;
-  private config: Record<string, unknown>;
-
-  constructor(
-    vocab: Record<string, number>,
-    spModelBuffer: ArrayBuffer,
-    config: Record<string, unknown>
-  ) {
-    this.vocab = vocab;
-    this.spModelBuffer = spModelBuffer;
-    this.config = config;
-
-    // decoderを作成
-    for (const [token, id] of Object.entries(this.vocab)) {
-      this.decoder[id as number] = token;
-    }
-
-    // 特殊トークンの設定
-    this.setupSpecialTokens();
-  }
-
-  private setupSpecialTokens(): void {
-    // configから特殊トークンを取得
-    const specialTokensMap = (this.config.special_tokens_map || {}) as Record<
-      string,
-      unknown
-    >;
-
-    // よく使われる特殊トークン
-    this.specialTokens["<pad>"] = this.vocab["<pad>"] || 0;
-    this.specialTokens["</s>"] = this.vocab["</s>"] || 1;
-    this.specialTokens["<s>"] = this.vocab["<s>"] || 2;
-    this.specialTokens["<unk>"] = this.vocab["<unk>"] || 3;
-
-    // configで定義された特殊トークンを追加
-    for (const [, tokenValue] of Object.entries(specialTokensMap)) {
-      if (
-        typeof tokenValue === "string" &&
-        this.vocab[tokenValue] !== undefined
-      ) {
-        this.specialTokens[tokenValue] = this.vocab[tokenValue];
-      }
-    }
-  }
-
-  encode(text: string): number[] {
-    return this.tokenize(text);
-  }
-
-  tokenize(text: string): number[] {
-    // 簡易的なSentencePiece実装
-    const tokens = this.sentencePieceEncode(text);
-    return tokens.map(
-      (token) => this.vocab[token] || this.specialTokens["<unk>"] || 3
-    );
-  }
-
-  private sentencePieceEncode(text: string): string[] {
-    // 基本的な前処理
-    const normalizedText = text.trim();
-    if (!normalizedText) return [];
-
-    // スペースを▁に置換（SentencePieceの標準）
-    const preprocessed = "▁" + normalizedText.replace(/ /g, "▁");
-
-    // 文字レベルで開始
-    const tokens = preprocessed.split("");
-
-    // 語彙にある最長マッチを探す
+  private preTokenize(text: string): string[] {
+    // Metaspaceスタイルのプリトークン化
     const result: string[] = [];
     let i = 0;
 
-    while (i < tokens.length) {
+    while (i < text.length) {
       let matched = false;
 
-      // 最長マッチを探す（最大10文字まで）
-      for (let len = Math.min(tokens.length - i, 10); len >= 1; len--) {
-        const candidate = tokens.slice(i, i + len).join("");
+      // 最長マッチを探す
+      for (let len = Math.min(text.length - i, 15); len >= 1; len--) {
+        // 15は適当な最大トークン長
+        const candidate = text.slice(i, i + len);
         if (this.vocab[candidate] !== undefined) {
           result.push(candidate);
           i += len;
@@ -459,7 +351,7 @@ class HuggingFaceSentencePieceTokenizer implements TokenizerInterface {
 
       if (!matched) {
         // 単一文字もなければ<unk>
-        const char = tokens[i];
+        const char = text[i];
         if (this.vocab[char] !== undefined) {
           result.push(char);
         } else {
@@ -477,6 +369,7 @@ class HuggingFaceSentencePieceTokenizer implements TokenizerInterface {
     options?: { skip_special_tokens?: boolean }
   ): string {
     const skipSpecialTokens = options?.skip_special_tokens ?? true;
+
     const tokens = tokenIds
       .map((id) => {
         const token = this.decoder[id];
@@ -493,8 +386,8 @@ class HuggingFaceSentencePieceTokenizer implements TokenizerInterface {
       })
       .filter((token) => token !== "");
 
-    // SentencePieceの▁をスペースに戻す
-    return tokens.join("").replace(/▁/g, " ").trim();
+    //  をスペースに戻してデコード
+    return tokens.join("").replace(/ /g, " ").trim();
   }
 
   get decoderStartToken(): number {

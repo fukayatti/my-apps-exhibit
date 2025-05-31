@@ -46,288 +46,509 @@ export class TranslationSystem {
     }
   }
 
-  async downloadAndLoadModel(
-    onStatusUpdate: (status: StatusMessage) => void,
-    onProgress: (progress: number) => void,
-    onFileStatusUpdate: (filename: string, progress: number) => void,
-    onFileComplete: (filename: string, size: number) => void
+  async downloadModel(
+    onProgress: (message: StatusMessage) => void
   ): Promise<void> {
+    await this.initStorage();
+    onProgress({
+      type: "info",
+      message: "モデルファイルのダウンロードを開始します...",
+    });
+
+    const files = await this.downloader.downloadAllFiles(
+      (progress: number, currentFile: string, fileProgress: number) => {
+        onProgress({
+          type: "progress",
+          message: `ファイルダウンロード中: ${currentFile} (${Math.round(
+            fileProgress
+          )}%)`,
+          progress: progress,
+        });
+      },
+      (filename: string, size: number) => {
+        onProgress({
+          type: "info",
+          message: `${filename} のダウンロード完了 (${Math.round(
+            size / 1024 / 1024
+          )}MB)`,
+        });
+      }
+    );
+
+    onProgress({ type: "info", message: "モデルファイルを保存中..." });
+    for (const [name, buffer] of Object.entries(files)) {
+      await this.storage.saveModel(name, buffer);
+    }
+    onProgress({
+      type: "success",
+      message: "モデルのダウンロードが完了しました。",
+    });
+  }
+
+  async loadModel(onProgress: (message: StatusMessage) => void): Promise<void> {
+    await this.initStorage();
+    onProgress({ type: "info", message: "モデルの読み込みを開始します..." });
+
     try {
-      await this.initStorage();
-
-      onStatusUpdate({ message: "キャッシュを確認中...", type: "loading" });
-
       // キャッシュされたモデルをチェック
       const requiredFiles = [
         "model.onnx",
         "vocab.json",
-        "sentencepiece.bpe.model",
         "tokenizer_config.json",
         "config.json",
       ];
-      const cachedFiles: Record<string, ArrayBuffer> = {};
-      let allCached = true;
+      const files: Record<string, ArrayBuffer> = {};
+      let allFilesExist = true;
 
-      for (const filename of requiredFiles) {
-        const hasFile = await this.storage.hasModel(filename);
-        if (hasFile) {
-          const info = await this.storage.getModelInfo(filename);
-          if (info) {
-            onFileComplete(filename, info.size);
-            const buffer = await this.storage.getModel(filename);
-            if (buffer) {
-              cachedFiles[filename] = buffer;
-              console.log(
-                `✓ ${filename} をキャッシュから読み込み (${(
-                  info.size /
-                  (1024 * 1024)
-                ).toFixed(1)}MB)`
-              );
-            }
-          }
+      for (const fileName of requiredFiles) {
+        const fileBuffer = await this.storage.getModel(fileName);
+        if (fileBuffer) {
+          files[fileName] = fileBuffer;
         } else {
-          allCached = false;
+          allFilesExist = false;
           break;
         }
       }
 
-      let files: Record<string, ArrayBuffer>;
-      if (allCached) {
-        onStatusUpdate({
-          message: "キャッシュからモデルを読み込み中...",
-          type: "loading",
+      if (!allFilesExist) {
+        onProgress({
+          type: "info",
+          message:
+            "必要なファイルがキャッシュにありません。ダウンロードを開始します...",
         });
-        onProgress(100);
-        files = cachedFiles;
-      } else {
-        onStatusUpdate({
-          message: "モデルファイルをダウンロード中...",
-          type: "loading",
-        });
-
-        files = await this.downloader.downloadAllFiles(
-          (progress, currentFile, fileProgress) => {
-            onProgress(progress);
-            onFileStatusUpdate(currentFile, fileProgress);
-          },
-          async (filename, size) => {
-            onFileComplete(filename, size);
-            // ダウンロードしたファイルをIndexedDBに保存
-            const buffer = this.downloader.getDownloadedFile(filename);
-            if (buffer) {
-              await this.storage.saveModel(filename, buffer);
-              console.log(`💾 ${filename} をIndexedDBに保存しました`);
-            }
+        await this.downloadModel(onProgress);
+        // ダウンロード後に再度ファイルを読み込む
+        for (const fileName of requiredFiles) {
+          const fileBuffer = await this.storage.getModel(fileName);
+          if (fileBuffer) {
+            files[fileName] = fileBuffer;
+          } else {
+            throw new Error(
+              `ファイル ${fileName} がダウンロード後も見つかりません。`
+            );
           }
-        );
+        }
       }
 
-      onStatusUpdate({ message: "ファイルを処理中...", type: "loading" });
+      onProgress({ type: "info", message: "ONNXモデルを初期化中..." });
+      const modelBuffer = files["model.onnx"];
+      this.session = await ort.InferenceSession.create(modelBuffer, {
+        executionProviders: ["webgpu", "wasm"], // WebGPUを優先、フォールバックでWASM
+        graphOptimizationLevel: "all",
+      });
+      console.log("✓ ONNXセッションの作成完了");
+      onProgress({ type: "info", message: "ONNXモデルの初期化完了。" });
 
-      // 設定ファイルの読み込み
-      const configBuffer = files["config.json"];
-      const configText = new TextDecoder().decode(configBuffer);
-      this.config = JSON.parse(configText);
-
+      onProgress({ type: "info", message: "トークナイザーを初期化中..." });
       // トークナイザーの初期化
       this.tokenizer = new HuggingFaceTokenizer();
 
-      // HuggingFaceの標準ファイルから読み込み
+      // vocab.jsonとtokenizer_config.jsonからtokenizer.json形式を生成
       const vocabBuffer = files["vocab.json"];
-      const spModelBuffer = files["sentencepiece.bpe.model"];
       const tokenizerConfigBuffer = files["tokenizer_config.json"];
 
-      await this.tokenizer.loadFromHuggingFaceFiles(
+      const tokenizerJsonBuffer = this.createTokenizerJson(
         vocabBuffer,
-        spModelBuffer,
         tokenizerConfigBuffer
       );
+      await this.tokenizer.loadFromBuffer(tokenizerJsonBuffer);
 
-      // ONNXモデルの読み込み
-      const modelBuffer = files["model.onnx"];
+      console.log("✓ トークナイザーの初期化完了");
+      onProgress({ type: "info", message: "トークナイザーの初期化完了。" });
 
-      // ONNX Runtime用の設定（WebGPUを優先、フォールバックでWASM）
-      const sessionOptions: ort.InferenceSession.SessionOptions = {
-        executionProviders: [
-          "webnn", // WebNNを優先
-          "webgpu", // WebGPUを次に試す
-          "wasm", // WebNNが利用できない場合のフォールバック
-        ],
-        graphOptimizationLevel: "all",
-        executionMode: "sequential",
-        enableMemPattern: false,
-        enableCpuMemArena: false,
-        logId: "translation-session",
-        logSeverityLevel: 4, // 致命的エラーのみ表示
-      };
-
-      this.session = await ort.InferenceSession.create(
-        modelBuffer,
-        sessionOptions
-      );
-
-      if (this.config && this.tokenizer) {
-        this.tokenizer.setDecoderStartTokenId(
-          this.config.decoder_start_token_id
-        );
-        this.tokenizer.setEosTokenId(this.config.eos_token_id);
-      }
+      onProgress({ type: "info", message: "設定ファイルを読み込み中..." });
+      const configBuffer = files["config.json"];
+      this.config = JSON.parse(
+        new TextDecoder().decode(configBuffer)
+      ) as TranslationConfig;
+      console.log("✓ 設定ファイルの読み込み完了");
+      onProgress({ type: "info", message: "設定ファイルの読み込み完了。" });
 
       this.isLoaded = true;
-      onStatusUpdate({
-        message: "モデルの読み込みが完了しました！",
+      onProgress({
         type: "success",
+        message: "モデルの読み込みが完了しました。",
       });
     } catch (error) {
       console.error("モデル読み込みエラー:", error);
-      let errorMessage = "モデルの読み込みに失敗しました。";
-
-      if (error instanceof Error) {
-        if (error.message.includes("Failed to fetch")) {
-          errorMessage =
-            "ネットワークエラー: モデルファイルのダウンロードに失敗しました。インターネット接続を確認してください。";
-        } else if (
-          error.message.includes("out of memory") ||
-          error.message.includes("1869662496")
-        ) {
-          errorMessage =
-            "メモリ不足: ブラウザのメモリが不足しています。他のタブを閉じるか、デバイスを再起動してお試しください。";
-        } else if (error.message.includes("CORS")) {
-          errorMessage =
-            "CORS エラー: ブラウザのセキュリティ制限により、ファイルの読み込みに失敗しました。Chrome またはFirefoxをお試しください。";
-        } else if (
-          error.message.includes("webgpu") ||
-          error.message.includes("WebGPU")
-        ) {
-          errorMessage =
-            "WebGPU エラー: WebGPUの初期化に失敗しました。ChromeまたはEdgeの最新版をお試しください。";
-        } else {
-          errorMessage = `エラー: ${error.message}`;
-        }
-      }
-
-      onStatusUpdate({ message: errorMessage, type: "error" });
+      onProgress({
+        type: "error",
+        message: `モデルの読み込みに失敗しました: ${error}`,
+      });
       throw error;
     }
   }
 
-  async translate(inputText: string, maxLength = 128): Promise<string> {
-    if (!this.isLoaded || !this.session || !this.tokenizer) {
-      throw new Error("モデルが読み込まれていません");
+  async translate(
+    text: string,
+    sourceLang: string,
+    targetLang: string,
+    onProgress?: (message: StatusMessage) => void
+  ): Promise<string> {
+    if (!this.isLoaded || !this.session || !this.tokenizer || !this.config) {
+      throw new Error(
+        "モデルが読み込まれていません。loadModel()を呼び出してください。"
+      );
     }
 
+    if (onProgress)
+      onProgress({ type: "info", message: "翻訳処理を開始します..." });
+
     try {
-      // トークン化
-      const encodings = this.tokenizer.tokenize(inputText);
-      const inputIds = new BigInt64Array(
-        encodings.input_ids[0].map((id) => BigInt(id))
+      // ソース言語のトークンIDを設定
+      // const srcLangToken = this.tokenizer.getLangToken(sourceLang); // 未使用
+      const srcLangId = this.tokenizer.getLangId(sourceLang);
+      if (srcLangId === undefined) {
+        throw new Error(
+          `ソース言語 ${sourceLang} のトークンIDが見つかりません。`
+        );
+      }
+      this.tokenizer.setEosTokenId(srcLangId); // NLLBモデルではeos_token_idがソース言語ID
+
+      if (onProgress)
+        onProgress({ type: "info", message: "テキストをトークン化中..." });
+      const { input_ids } = this.tokenizer.tokenize(text);
+      const inputIdsTensor = new ort.Tensor(
+        "int64",
+        BigInt64Array.from(input_ids[0].map(BigInt)),
+        [1, input_ids[0].length]
       );
 
-      // デコーダーの初期トークン
-      const decoderStartToken = this.tokenizer.decoderStartToken;
-      if (decoderStartToken === null) {
-        throw new Error("Decoder start token not set");
+      // デコーダーの開始トークンIDを設定
+      // const tgtLangToken = this.tokenizer.getLangToken(targetLang); // 未使用
+      const tgtLangId = this.tokenizer.getLangId(targetLang);
+      if (tgtLangId === undefined) {
+        throw new Error(
+          `ターゲット言語 ${targetLang} のトークンIDが見つかりません。`
+        );
+      }
+      this.tokenizer.setDecoderStartTokenId(tgtLangId);
+
+      const decoderStartTokenId = this.tokenizer.decoderStartToken;
+      if (decoderStartTokenId === null) {
+        throw new Error("デコーダー開始トークンIDが取得できません。");
       }
 
-      const generatedIds = [decoderStartToken];
+      const feeds: Record<string, ort.Tensor> = {
+        input_ids: inputIdsTensor,
+        decoder_input_ids: new ort.Tensor(
+          "int64",
+          BigInt64Array.from([BigInt(decoderStartTokenId)]),
+          [1, 1]
+        ),
+      };
 
-      // 逐次生成
+      if (onProgress)
+        onProgress({ type: "info", message: "ONNXモデルで推論中..." });
+
+      // Beam Searchを手動で実装 (簡易版)
+      const numBeams = this.config.num_beams || 4;
+      const maxLength = this.config.max_length || 200;
+      const beams: Array<{ tokens: number[]; score: number }> = [
+        { tokens: [decoderStartTokenId], score: 0.0 },
+      ];
+      const completedSequences: Array<{ tokens: number[]; score: number }> = [];
+
       for (let step = 0; step < maxLength; step++) {
-        const decoderInputIds = new BigInt64Array(
-          generatedIds.map((id) => BigInt(id))
-        );
+        if (beams.length === 0) break;
 
-        // ONNX推論実行
-        const feeds: Record<string, ort.Tensor> = {
-          input_ids: new ort.Tensor("int64", inputIds, [1, inputIds.length]),
-          decoder_input_ids: new ort.Tensor("int64", decoderInputIds, [
-            1,
-            decoderInputIds.length,
-          ]),
-        };
-
-        const outputs = await this.session.run(feeds);
-        const logitsOutput = outputs.logits;
-
-        if (!logitsOutput || !logitsOutput.data) {
-          throw new Error("Invalid model output");
-        }
-
-        const logits = logitsOutput.data as Float32Array;
-
-        // 最後のトークンの確率分布から次のトークンを選択
-        const vocabSize = logits.length / decoderInputIds.length;
-        const lastTokenLogits = logits.slice(-vocabSize);
-        const nextTokenId = this.argmax(lastTokenLogits);
-
-        // 異常なトークンIDをチェック
-        if (nextTokenId < 0 || nextTokenId >= vocabSize) {
-          console.warn(
-            `異常なトークンID検出: ${nextTokenId}, 語彙サイズ: ${vocabSize}`
+        const nextBeams: Array<{ tokens: number[]; score: number }> = [];
+        for (const beam of beams) {
+          feeds.decoder_input_ids = new ort.Tensor(
+            "int64",
+            BigInt64Array.from(beam.tokens.map(BigInt)),
+            [1, beam.tokens.length]
           );
-          break;
+
+          const output = await this.session.run(feeds);
+          const logits = output.logits.data as Float32Array; // 型アサーション
+
+          // 次のトークンの確率を取得 (最後のトークンのみ)
+          const nextTokenLogits = logits.slice(
+            (beam.tokens.length - 1) * this.config.vocab_size,
+            beam.tokens.length * this.config.vocab_size
+          );
+
+          // ソフトマックス関数で確率に変換
+          const probabilities = this.softmax(nextTokenLogits);
+
+          // 上位k個のトークンを選択 (k=numBeams)
+          const topK = this.getTopK(probabilities, numBeams);
+
+          for (const { index: tokenId, probability } of topK) {
+            const newTokens = [...beam.tokens, tokenId];
+            const newScore = beam.score + Math.log(probability); // 対数確率を使用
+
+            if (tokenId === this.tokenizer.eosToken) {
+              completedSequences.push({ tokens: newTokens, score: newScore });
+            } else {
+              nextBeams.push({ tokens: newTokens, score: newScore });
+            }
+          }
         }
 
-        // デバッグ用: 生成されたトークンをログ出力
-        const tokenStr =
-          this.tokenizer.getTokenString(nextTokenId) || "<unknown>";
-        console.log(
-          `生成トークン ${step}: ID=${nextTokenId}, Token="${tokenStr}"`
+        // ビームをスコアでソートし、上位numBeams個を保持
+        beams.length = 0; // beamsをクリア
+        beams.push(
+          ...nextBeams.sort((a, b) => b.score - a.score).slice(0, numBeams)
         );
 
-        generatedIds.push(nextTokenId);
-
-        // EOSトークンで終了
-        const eosToken = this.tokenizer.eosToken;
-        if (eosToken !== null && nextTokenId === eosToken) {
-          break;
+        if (onProgress && step % 10 === 0) {
+          onProgress({
+            type: "info",
+            message: `推論中 (ステップ ${step + 1}/${maxLength})...`,
+          });
         }
       }
 
-      // デコード
-      let decodedIds = generatedIds.slice(1); // BOSを除去
-      const eosToken = this.tokenizer.eosToken;
-      if (eosToken !== null && decodedIds.includes(eosToken)) {
-        const eosIndex = decodedIds.indexOf(eosToken);
-        decodedIds = decodedIds.slice(0, eosIndex);
+      // 最もスコアの高い完了シーケンスを選択
+      const bestSequence =
+        completedSequences.sort((a, b) => b.score - a.score)[0]?.tokens ||
+        beams.sort((a, b) => b.score - a.score)[0]?.tokens;
+
+      if (!bestSequence) {
+        throw new Error("翻訳結果が生成されませんでした。");
       }
 
-      const translatedText = this.tokenizer.decode(decodedIds, true);
+      if (onProgress)
+        onProgress({ type: "info", message: "トークンをデコード中..." });
+      const translatedText = this.tokenizer.decode(bestSequence, true);
+
+      if (onProgress)
+        onProgress({ type: "success", message: "翻訳処理が完了しました。" });
       return translatedText;
     } catch (error) {
       console.error("翻訳エラー:", error);
+      if (onProgress)
+        onProgress({
+          type: "error",
+          message: `翻訳に失敗しました: ${error}`,
+        });
       throw error;
     }
   }
 
-  private argmax(array: Float32Array): number {
-    let maxIndex = 0;
-    let maxValue = array[0];
-    for (let i = 1; i < array.length; i++) {
-      if (array[i] > maxValue) {
-        maxValue = array[i];
-        maxIndex = i;
-      }
-    }
-    return maxIndex;
+  getModelInfo(): ModelInfo | null {
+    if (!this.isLoaded || !this.config) return null;
+    return {
+      model_name: this.config._name_or_path || "N/A",
+      vocab_size: this.config.vocab_size || 0,
+      num_beams: this.config.num_beams || 0,
+      max_length: this.config.max_length || 0,
+      architectures: this.config.architectures || [],
+    };
   }
 
-  async getCacheInfo(): Promise<ModelInfo[]> {
-    await this.initStorage();
-    return await this.storage.getAllModelInfo();
+  isModelLoaded(): boolean {
+    return this.isLoaded;
   }
 
   async clearCache(): Promise<void> {
     await this.initStorage();
     await this.storage.clearAll();
     this.isLoaded = false;
+    this.session = null;
+    this.tokenizer = null;
+    this.config = null;
   }
 
-  get isModelLoaded(): boolean {
-    return this.isLoaded;
+  private softmax(array: Float32Array): Float32Array {
+    const maxLogit = Math.max(...Array.from(array));
+    const result = new Float32Array(array.length);
+    let sumExps = 0;
+
+    // 最初にexpを計算してsumを求める
+    for (let i = 0; i < array.length; i++) {
+      result[i] = Math.exp(array[i] - maxLogit);
+      sumExps += result[i];
+    }
+
+    // 正規化
+    for (let i = 0; i < result.length; i++) {
+      result[i] = result[i] / sumExps;
+    }
+
+    return result;
   }
 
-  getRequiredFiles(): string[] {
-    return this.downloader.getFiles().map((file) => file.name);
+  private getTopK(
+    probabilities: Float32Array,
+    k: number
+  ): Array<{ index: number; probability: number }> {
+    return Array.from(probabilities)
+      .map((probability, index) => ({ index, probability }))
+      .sort((a, b) => b.probability - a.probability)
+      .slice(0, k);
+  }
+
+  // private argmax(array: Float32Array): number {
+  //   let maxIndex = 0;
+  //   let maxValue = array[0];
+  //   for (let i = 1; i < array.length; i++) {
+  //     if (array[i] > maxValue) {
+  //       maxValue = array[i];
+  //       maxIndex = i;
+  //     }
+  //   }
+  //   return maxIndex;
+  // }
+
+  private createTokenizerJson(
+    vocabBuffer: ArrayBuffer,
+    tokenizerConfigBuffer: ArrayBuffer
+  ): ArrayBuffer {
+    try {
+      // vocab.jsonとtokenizer_config.jsonを解析
+      const vocab = JSON.parse(new TextDecoder().decode(vocabBuffer));
+      const tokenizerConfig = JSON.parse(
+        new TextDecoder().decode(tokenizerConfigBuffer)
+      );
+
+      // tokenizer.json形式を生成
+      const tokenizerJson = {
+        version: "1.0",
+        truncation: null,
+        padding: null,
+        added_tokens: [
+          // デフォルトの特殊トークン。tokenizerConfigから上書きされる可能性あり
+        ],
+        normalizer: {
+          // NLLB-200の一般的な設定
+          type: "Sequence",
+          normalizers: [
+            { type: "Prepend", prepend: " " },
+            { type: "Replace", pattern: { String: " " }, content: " " },
+          ],
+        },
+        pre_tokenizer: {
+          // NLLB-200の一般的な設定
+          type: "Metaspace",
+          replacement: " ",
+          add_prefix_space: true,
+          prepend_scheme: "always",
+        },
+        model: {
+          type: "BPE", // SentencePieceはBPEの一種として扱われることが多い
+          dropout: null,
+          unk_token: "<unk>", // tokenizerConfigから取得するべき
+          continuing_subword_prefix: null, // SentencePieceでは通常使用しない
+          end_of_word_suffix: null, // SentencePieceでは通常使用しない
+          fuse_unk: false,
+          byte_fallback: false, // SentencePieceでは通常使用しない
+          vocab: vocab,
+          merges: [], // SentencePieceの場合、マージルールは.modelファイル内。ここでは空
+        },
+        decoder: {
+          // NLLB-200の一般的な設定
+          type: "Metaspace",
+          replacement: " ",
+          add_prefix_space: true,
+          prepend_scheme: "always",
+        },
+        post_processor: null, // NLLB-200では通常シンプルなポストプロセス
+      };
+
+      // tokenizerConfigから情報をマージ
+      if (tokenizerConfig.added_tokens) {
+        tokenizerJson.added_tokens = tokenizerConfig.added_tokens;
+      }
+
+      if (tokenizerConfig.special_tokens_map) {
+        const specialTokensMap = tokenizerConfig.special_tokens_map as Record<
+          string,
+          string | { content: string; id: number }
+        >;
+        const addedTokensMap = new Map(
+          tokenizerJson.added_tokens.map((t) => [(t as any).content, t])
+        );
+
+        for (const [, tokenValueObj] of Object.entries(specialTokensMap)) {
+          let tokenContent: string;
+          let tokenId: number | undefined = undefined;
+
+          if (typeof tokenValueObj === "string") {
+            tokenContent = tokenValueObj;
+          } else if (
+            typeof tokenValueObj === "object" &&
+            tokenValueObj.content
+          ) {
+            tokenContent = tokenValueObj.content;
+            tokenId = tokenValueObj.id; // idが提供されていれば使用
+          } else {
+            continue;
+          }
+
+          if (
+            vocab[tokenContent] !== undefined &&
+            !addedTokensMap.has(tokenContent)
+          ) {
+            addedTokensMap.set(tokenContent, {
+              id: tokenId ?? vocab[tokenContent], // idがなければvocabから
+              content: tokenContent,
+              single_word: false, // デフォルト値
+              lstrip: false, // デフォルト値
+              rstrip: false, // デフォルト値
+              normalized: false, // デフォルト値
+              special: true,
+            });
+          } else if (
+            addedTokensMap.has(tokenContent) &&
+            tokenId !== undefined
+          ) {
+            // 既存のトークンIDを更新 (もしあれば)
+            const existingToken = addedTokensMap.get(tokenContent);
+            if (existingToken) (existingToken as any).id = tokenId;
+          }
+        }
+        tokenizerJson.added_tokens = Array.from(addedTokensMap.values());
+      }
+
+      if (tokenizerConfig.unk_token) {
+        if (typeof tokenizerConfig.unk_token === "string") {
+          tokenizerJson.model.unk_token = tokenizerConfig.unk_token;
+        } else if (
+          typeof tokenizerConfig.unk_token === "object" &&
+          (tokenizerConfig.unk_token as any).content
+        ) {
+          tokenizerJson.model.unk_token = (
+            tokenizerConfig.unk_token as any
+          ).content;
+        }
+      }
+
+      // 必須の特殊トークンがadded_tokensに含まれているか確認し、なければ追加
+      const ensureSpecialToken = (content: string, defaultId: number) => {
+        if (
+          !tokenizerJson.added_tokens.some(
+            (t) => (t as any).content === content
+          )
+        ) {
+          tokenizerJson.added_tokens.push({
+            id: vocab[content] ?? defaultId,
+            content: content,
+            single_word: false,
+            lstrip: false,
+            rstrip: false,
+            normalized: false,
+            special: true,
+          } as any);
+        }
+      };
+
+      ensureSpecialToken("<pad>", 0);
+      ensureSpecialToken("</s>", 1);
+      ensureSpecialToken("<s>", 2);
+      ensureSpecialToken("<unk>", vocab[tokenizerJson.model.unk_token] ?? 3);
+
+      const tokenizerJsonString = JSON.stringify(tokenizerJson, null, 2);
+      const uint8Array = new TextEncoder().encode(tokenizerJsonString);
+      return uint8Array.buffer.slice(
+        uint8Array.byteOffset,
+        uint8Array.byteOffset + uint8Array.byteLength
+      );
+    } catch (error) {
+      console.error("tokenizer.json生成エラー:", error);
+      throw new Error(`tokenizer.json生成に失敗: ${error}`);
+    }
   }
 }

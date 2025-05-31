@@ -1,16 +1,21 @@
 import { ModelFile } from "./types";
 
 export class ModelDownloader {
-  private baseUrl =
-    "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/";
-  private files: ModelFile[] = [
-    { name: "model.onnx", size: "~150MB" },
-    { name: "vocab.json", size: "~3.5MB" },
-    { name: "sentencepiece.bpe.model", size: "~2.3MB" },
-    { name: "tokenizer_config.json", size: "~2KB" },
-    { name: "config.json", size: "~1KB" },
-  ];
+  private baseUrl: string;
+  private files: ModelFile[];
   private downloadedFiles: Record<string, ArrayBuffer> = {};
+
+  constructor(baseUrl?: string, files?: ModelFile[]) {
+    this.baseUrl =
+      baseUrl ||
+      "https://huggingface.co/fukayatti0/small100-quantized-int8/resolve/main/";
+    this.files = files || [
+      { name: "model.onnx", size: "~150MB" },
+      { name: "vocab.json", size: "~3.5MB" },
+      { name: "tokenizer_config.json", size: "~2KB" },
+      { name: "config.json", size: "~1KB" },
+    ];
+  }
 
   async downloadFile(
     filename: string,
@@ -59,7 +64,10 @@ export class ModelDownloader {
 
       return result.buffer;
     } catch (error) {
-      console.error(`Error downloading ${filename}:`, error);
+      console.error(
+        `Error downloading ${filename} from ${this.baseUrl + filename}:`,
+        error
+      );
       throw error;
     }
   }
