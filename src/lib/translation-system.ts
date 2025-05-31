@@ -23,16 +23,14 @@ export class TranslationSystem {
     // ONNX Runtime Webの設定
     ort.env.wasm.numThreads = 1; // スレッド数を1に設定してCORS問題を回避
     ort.env.wasm.simd = true; // SIMD最適化を有効化
-    ort.env.webgpu.profiling = { mode: "off" }; // WebGPUプロファイリングを無効化
-    ort.env.webgpu.validateInputContent = false; // WebGPU入力検証を無効化してパフォーマンス向上
     ort.env.logLevel = "error"; // エラーレベルのみ表示
 
-    // WebGPUサポートチェック
-    if (typeof navigator !== "undefined" && "gpu" in navigator) {
-      console.log("✓ WebGPUサポートが検出されました");
+    // WebNNサポートチェック
+    if (typeof navigator !== "undefined" && "ml" in navigator) {
+      console.log("✓ WebNNサポートが検出されました");
     } else {
       console.log(
-        "⚠️ WebGPUサポートが検出されませんでした。WASMにフォールバックします。"
+        "⚠️ WebNNサポートが検出されませんでした。WASMにフォールバックします。"
       );
     }
   }
@@ -142,13 +140,10 @@ export class TranslationSystem {
       // ONNX Runtime用の設定（WebGPUを優先、フォールバックでWASM）
       const sessionOptions: ort.InferenceSession.SessionOptions = {
         executionProviders: [
-          {
-            name: "webgpu",
-            preferredLayout: "NHWC",
-          },
-          "wasm", // WebGPUが利用できない場合のフォールバック
+          "webnn", // WebNNを優先
+          "wasm", // WebNNが利用できない場合のフォールバック
         ],
-        graphOptimizationLevel: "disabled", // WebGPUでの互換性を最大化
+        graphOptimizationLevel: "all",
         executionMode: "sequential",
         enableMemPattern: false,
         enableCpuMemArena: false,
