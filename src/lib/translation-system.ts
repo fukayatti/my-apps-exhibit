@@ -24,7 +24,8 @@ export class TranslationSystem {
     ort.env.wasm.numThreads = 1; // スレッド数を1に設定してCORS問題を回避
     ort.env.wasm.simd = true; // SIMD最適化を有効化
     ort.env.webgpu.profiling = { mode: "off" }; // WebGPUプロファイリングを無効化
-    ort.env.logLevel = "warning"; // ログレベルを設定
+    ort.env.webgpu.validateInputContent = false; // WebGPU入力検証を無効化してパフォーマンス向上
+    ort.env.logLevel = "error"; // エラーレベルのみ表示
 
     // WebGPUサポートチェック
     if (typeof navigator !== "undefined" && "gpu" in navigator) {
@@ -141,15 +142,18 @@ export class TranslationSystem {
       // ONNX Runtime用の設定（WebGPUを優先、フォールバックでWASM）
       const sessionOptions: ort.InferenceSession.SessionOptions = {
         executionProviders: [
-          "webgpu", // WebGPUを使用
+          {
+            name: "webgpu",
+            preferredLayout: "NHWC",
+          },
           "wasm", // WebGPUが利用できない場合のフォールバック
         ],
-        graphOptimizationLevel: "all",
+        graphOptimizationLevel: "disabled", // WebGPUでの互換性を最大化
         executionMode: "sequential",
         enableMemPattern: false,
         enableCpuMemArena: false,
         logId: "translation-session",
-        logSeverityLevel: 2,
+        logSeverityLevel: 4, // 致命的エラーのみ表示
       };
 
       this.session = await ort.InferenceSession.create(
