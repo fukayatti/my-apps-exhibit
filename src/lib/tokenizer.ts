@@ -395,7 +395,11 @@ class TokenizerJsonProcessor implements TokenizerInterface {
   }
 
   get eosToken(): number {
-    return this.specialTokens["</s>"] || 1;
+    return this.specialTokens["</s>"] ?? this.vocab["</s>"] ?? 1; // Ensure fallback if not in specialTokens initially
+  }
+
+  set eosToken(id: number) {
+    this.specialTokens["</s>"] = id;
   }
 
   get padToken(): number {
