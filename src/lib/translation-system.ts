@@ -6,8 +6,8 @@ import {
   TranslationConfig,
   StatusMessage,
   ModelInfo,
-  TokenizerConfig,
-  AddedToken,
+  // TokenizerConfig, // 未使用のため削除
+  // AddedToken, // 未使用のため削除
   FileStatus,
 } from "./types";
 
