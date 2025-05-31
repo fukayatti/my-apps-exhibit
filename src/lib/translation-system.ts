@@ -30,8 +30,12 @@ export class TranslationSystem {
       console.log("✓ WebNNサポートが検出されました");
     } else {
       console.log(
-        "⚠️ WebNNサポートが検出されませんでした。WASMにフォールバックします。"
+        "⚠️ WebNNサポートが検出されませんでした。WebGPUにフォールバックします。"
       );
+    }
+    // WebGPUサポートチェック
+    if (typeof navigator !== "undefined" && "gpu" in navigator) {
+      console.log("✓ WebGPUサポートが検出されました");
     }
   }
 
@@ -141,6 +145,7 @@ export class TranslationSystem {
       const sessionOptions: ort.InferenceSession.SessionOptions = {
         executionProviders: [
           "webnn", // WebNNを優先
+          "webgpu", // WebGPUを次に試す
           "wasm", // WebNNが利用できない場合のフォールバック
         ],
         graphOptimizationLevel: "all",
