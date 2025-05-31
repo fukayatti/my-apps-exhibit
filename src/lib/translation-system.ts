@@ -54,42 +54,101 @@ export class TranslationSystem {
   }
 
   async downloadModel(
-    onProgress: (message: StatusMessage) => void
+    onProgress: (message: StatusMessage) => void,
+    onFileProgress: (
+      filename: string,
+      progress: number,
+      loaded: number,
+      total: number
+    ) => void,
+    onFileComplete: (filename: string, size: number) => void
   ): Promise<void> {
     await this.initStorage();
-    onProgress({
+    const statusStart: StatusMessage = {
       type: "info",
       message: "モデルファイルのダウンロードを開始します...",
-    });
+    };
+    console.log(`[TranslationSystem] ${statusStart.message}`);
+    onProgress(statusStart);
 
-    const files = await this.downloader.downloadAllFiles(
-      (progress: number, currentFile: string, fileProgress: number) => {
-        onProgress({
-          type: "progress",
-          message: `ファイルダウンロード中: ${currentFile} (${Math.round(
-            fileProgress
-          )}%)`,
-          progress: progress,
-        });
-      },
-      (filename: string, size: number) => {
-        onProgress({
-          type: "info",
-          message: `${filename} のダウンロード完了 (${Math.round(
-            size / 1024 / 1024
-          )}MB)`,
-        });
+    try {
+      const files = await this.downloader.downloadAllFiles(
+        (
+          progress: number,
+          currentFile: string,
+          fileProg: number,
+          loadedBytes?: number,
+          totalBytes?: number
+        ) => {
+          const progressMsg: StatusMessage = {
+            type: "progress",
+            message: `ファイルダウンロード中: ${currentFile} (${Math.round(
+              fileProg
+            )}%)`,
+            progress: progress,
+          };
+          // console.log(`[TranslationSystem] ${progressMsg.message} - Overall: ${progress.toFixed(2)}%`);
+          onProgress(progressMsg);
+          if (loadedBytes !== undefined && totalBytes !== undefined) {
+            onFileProgress(currentFile, fileProg, loadedBytes, totalBytes);
+          } else {
+            onFileProgress(currentFile, fileProg, 0, 0); // totalが不明な場合もあるため
+          }
+        },
+        (filename: string, size: number) => {
+          const completeMsg: StatusMessage = {
+            type: "info",
+            message: `${filename} のダウンロード完了 (${(
+              size /
+              1024 /
+              1024
+            ).toFixed(2)}MB)`,
+          };
+          console.log(`[TranslationSystem] ${completeMsg.message}`);
+          onProgress(completeMsg);
+          onFileComplete(filename, size);
+        }
+      );
+
+      const statusSaving: StatusMessage = {
+        type: "info",
+        message: "ダウンロードしたモデルファイルを保存中...",
+      };
+      console.log(`[TranslationSystem] ${statusSaving.message}`);
+      onProgress(statusSaving);
+
+      for (const [name, buffer] of Object.entries(files)) {
+        console.log(
+          `[TranslationSystem] 保存中: ${name} (${(
+            buffer.byteLength /
+            1024 /
+            1024
+          ).toFixed(2)}MB)`
+        );
+        await this.storage.saveModel(name, buffer);
+        console.log(`[TranslationSystem] 保存完了: ${name}`);
       }
-    );
-
-    onProgress({ type: "info", message: "モデルファイルを保存中..." });
-    for (const [name, buffer] of Object.entries(files)) {
-      await this.storage.saveModel(name, buffer);
+      const statusSuccess: StatusMessage = {
+        type: "success",
+        message: "モデルのダウンロードと保存が完了しました。",
+      };
+      console.log(`[TranslationSystem] ${statusSuccess.message}`);
+      onProgress(statusSuccess);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      console.error(
+        "[TranslationSystem] downloadModelでエラー発生:",
+        errorMessage,
+        error
+      );
+      const statusError: StatusMessage = {
+        type: "error",
+        message: `モデルのダウンロードに失敗しました: ${errorMessage}`,
+      };
+      onProgress(statusError);
+      throw error; // エラーを再スローして呼び出し元で処理できるようにする
     }
-    onProgress({
-      type: "success",
-      message: "モデルのダウンロードが完了しました。",
-    });
   }
 
   async loadModel(onProgress: (message: StatusMessage) => void): Promise<void> {
@@ -123,7 +182,13 @@ export class TranslationSystem {
           message:
             "必要なファイルがキャッシュにありません。ダウンロードを開始します...",
         });
-        await this.downloadModel(onProgress);
+        // downloadModelのシグネチャ変更に合わせて呼び出しを修正
+        // このコンテキストでは個別のファイル進捗は不要なため、ダミーのコールバックを渡す
+        await this.downloadModel(
+          onProgress,
+          () => {},
+          () => {}
+        );
         // ダウンロード後に再度ファイルを読み込む
         for (const fileName of requiredFiles) {
           const fileBuffer = await this.storage.getModel(fileName);
@@ -180,21 +245,29 @@ export class TranslationSystem {
       console.error("モデル読み込みエラー:", error);
       onProgress({
         type: "error",
-        message: `モデルの読み込みに失敗しました: ${error}`,
+        message: `モデルの読み込みに失敗しました: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       });
+      console.error("[TranslationSystem] loadModelでエラー発生:", error);
       throw error;
     }
   }
 
   async downloadAndLoadModel(
     onStatusUpdate: (status: StatusMessage) => void,
-    onProgressUpdate: (progress: number) => void,
-    onFileProgress: (filename: string, progress: number) => void,
-    onFileComplete: (filename: string, size: number) => void
+    onOverallProgressUpdate: (progress: number) => void, // 全体進捗
+    onFileProgressUpdate: (
+      filename: string,
+      progress: number,
+      loadedBytes: number,
+      totalBytes: number
+    ) => void, // 個別ファイル進捗
+    onFileCompleteUpdate: (filename: string, size: number) => void // 個別ファイル完了
   ): Promise<void> {
     await this.initStorage();
+    console.log("[TranslationSystem] downloadAndLoadModel開始");
 
-    // まずキャッシュをチェック
     const requiredFiles = [
       "model.onnx",
       "vocab.json",
@@ -203,52 +276,151 @@ export class TranslationSystem {
     ];
 
     let allFilesExist = true;
+    const filesToDownload: string[] = [];
     for (const fileName of requiredFiles) {
       const fileBuffer = await this.storage.getModel(fileName);
       if (!fileBuffer) {
         allFilesExist = false;
-        break;
+        filesToDownload.push(fileName);
+        console.log(
+          `[TranslationSystem] キャッシュにファイルなし: ${fileName}`
+        );
+      } else {
+        console.log(
+          `[TranslationSystem] キャッシュにファイルあり: ${fileName}`
+        );
+        // キャッシュにあるファイルに対しても完了イベントを発火させる
+        const info = await this.storage.getModelInfo(fileName); // getFileInfo を getModelInfo に変更
+        if (info) {
+          onFileCompleteUpdate(fileName, info.size);
+          // 個別ファイルの進捗も100%として通知
+          onFileProgressUpdate(fileName, 100, info.size, info.size);
+        }
       }
+    }
+    // 全体進捗を更新 (キャッシュヒット分)
+    const cachedFilesCount = requiredFiles.length - filesToDownload.length;
+    if (requiredFiles.length > 0) {
+      onOverallProgressUpdate((cachedFilesCount / requiredFiles.length) * 100);
     }
 
     if (!allFilesExist) {
-      // ダウンロードが必要
-      onStatusUpdate({
+      const downloadStatus: StatusMessage = {
         type: "info",
-        message: "モデルファイルのダウンロードを開始します...",
-      });
+        message: `必要なモデルファイル (${filesToDownload.join(
+          ", "
+        )}) のダウンロードを開始します...`,
+      };
+      console.log(`[TranslationSystem] ${downloadStatus.message}`);
+      onStatusUpdate(downloadStatus);
 
-      const files = await this.downloader.downloadAllFiles(
-        (progress: number, currentFile: string, fileProgress: number) => {
-          onProgressUpdate(progress);
-          onFileProgress(currentFile, fileProgress);
-          onStatusUpdate({
-            type: "progress",
-            message: `ファイルダウンロード中: ${currentFile} (${Math.round(
-              fileProgress
-            )}%)`,
-            progress: progress,
-          });
-        },
-        (filename: string, size: number) => {
-          onFileComplete(filename, size);
-          onStatusUpdate({
-            type: "info",
-            message: `${filename} のダウンロード完了 (${Math.round(
-              size / 1024 / 1024
-            )}MB)`,
-          });
+      try {
+        // ModelDownloaderのfilesを実際にダウンロードが必要なファイルに絞るか、
+        // downloadAllFilesが特定のファイルのみダウンロードする機能を持つように変更する必要がある。
+        // ここでは、downloaderが設定された全ファイルをダウンロードしようとする前提で進めるが、
+        // 理想的にはdownloader.downloadSpecificFiles(filesToDownload, ...) のような形が良い。
+        // 現状のdownloader.downloadAllFilesは固定リストをダウンロードするため、
+        // キャッシュチェックとダウンロードのロジックが少し冗長になる。
+        // 今回はdownloaderのインターフェースは変更せず、TranslationSystem側で対応。
+
+        const files = await this.downloader.downloadAllFiles(
+          (
+            overallProgress: number,
+            currentFile: string,
+            fileSpecificProgress: number,
+            loadedBytes?: number,
+            totalBytes?: number
+          ) => {
+            // downloaderからの進捗は全ファイルに対するものなので、
+            // UI側の全体進捗とは別に計算し直す必要があるかもしれない。
+            // ここではdownloaderからのoverallProgressをそのまま使う。
+            onOverallProgressUpdate(overallProgress);
+            if (loadedBytes !== undefined && totalBytes !== undefined) {
+              onFileProgressUpdate(
+                currentFile,
+                fileSpecificProgress,
+                loadedBytes,
+                totalBytes
+              );
+            } else {
+              onFileProgressUpdate(currentFile, fileSpecificProgress, 0, 0);
+            }
+            const progressMsg: StatusMessage = {
+              type: "progress",
+              message: `ファイルダウンロード中: ${currentFile} (${Math.round(
+                fileSpecificProgress
+              )}%)`,
+              progress: overallProgress,
+            };
+            onStatusUpdate(progressMsg);
+          },
+          (filename: string, size: number) => {
+            onFileCompleteUpdate(filename, size);
+            const completeMsg: StatusMessage = {
+              type: "info",
+              message: `${filename} のダウンロード完了 (${(
+                size /
+                1024 /
+                1024
+              ).toFixed(2)}MB)`,
+            };
+            console.log(`[TranslationSystem] ${completeMsg.message}`);
+            onStatusUpdate(completeMsg);
+          }
+        );
+
+        const savingStatus: StatusMessage = {
+          type: "info",
+          message: "ダウンロードしたモデルファイルを保存中...",
+        };
+        console.log(`[TranslationSystem] ${savingStatus.message}`);
+        onStatusUpdate(savingStatus);
+        for (const [name, buffer] of Object.entries(files)) {
+          // filesToDownloadに含まれるファイルのみ保存する（downloaderが全ファイル返す場合）
+          // もしdownloaderが指定ファイルのみ返すならこのチェックは不要
+          if (filesToDownload.includes(name)) {
+            console.log(
+              `[TranslationSystem] 保存中: ${name} (${(
+                buffer.byteLength /
+                1024 /
+                1024
+              ).toFixed(2)}MB)`
+            );
+            await this.storage.saveModel(name, buffer);
+            console.log(`[TranslationSystem] 保存完了: ${name}`);
+          }
         }
-      );
-
-      onStatusUpdate({ type: "info", message: "モデルファイルを保存中..." });
-      for (const [name, buffer] of Object.entries(files)) {
-        await this.storage.saveModel(name, buffer);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error(
+          "[TranslationSystem] downloadAndLoadModel - ダウンロード中にエラー発生:",
+          errorMessage,
+          error
+        );
+        const statusError: StatusMessage = {
+          type: "error",
+          message: `モデルのダウンロードに失敗しました: ${errorMessage}`,
+        };
+        onStatusUpdate(statusError);
+        throw error; // エラーを再スロー
       }
+    } else {
+      console.log(
+        "[TranslationSystem] 全てのモデルファイルがキャッシュに存在します。"
+      );
+      onOverallProgressUpdate(100); // 全てキャッシュヒットなら全体進捗100%
+      const cacheMsg: StatusMessage = {
+        type: "info",
+        message: "全てのモデルファイルがキャッシュに存在します。",
+      };
+      onStatusUpdate(cacheMsg);
     }
 
     // モデルを読み込み
+    console.log("[TranslationSystem] モデルの読み込みを開始します...");
     await this.loadModel(onStatusUpdate);
+    console.log("[TranslationSystem] downloadAndLoadModel完了");
   }
 
   async translate(
@@ -263,43 +435,74 @@ export class TranslationSystem {
       );
     }
 
-    if (onProgress)
-      onProgress({ type: "info", message: "翻訳処理を開始します..." });
+    if (onProgress) {
+      const startMsg: StatusMessage = {
+        type: "info",
+        message: "翻訳処理を開始します...",
+      };
+      console.log(`[TranslationSystem][translate] ${startMsg.message}`);
+      onProgress(startMsg);
+    }
 
     try {
+      console.log(
+        `[TranslationSystem][translate] 入力テキスト: "${text}", ソース言語: ${sourceLang}, ターゲット言語: ${targetLang}`
+      );
       // ソース言語のトークンIDを設定
-      // const srcLangToken = this.tokenizer.getLangToken(sourceLang); // 未使用
       const srcLangId = this.tokenizer.getLangId(sourceLang);
       if (srcLangId === undefined) {
         throw new Error(
-          `ソース言語 ${sourceLang} のトークンIDが見つかりません。`
+          `ソース言語 ${sourceLang} のトークンIDが見つかりません。利用可能な言語: ${Object.keys(
+            this.config?.lang_to_id || {}
+          ).join(", ")}`
         );
       }
-      this.tokenizer.setEosTokenId(srcLangId); // NLLBモデルではeos_token_idがソース言語ID
+      this.tokenizer.setEosTokenId(srcLangId);
+      console.log(
+        `[TranslationSystem][translate] ソース言語ID (${sourceLang}): ${srcLangId}, EOSトークンIDを ${srcLangId} に設定`
+      );
 
-      if (onProgress)
-        onProgress({ type: "info", message: "テキストをトークン化中..." });
+      if (onProgress) {
+        const tokenizeMsg: StatusMessage = {
+          type: "info",
+          message: "テキストをトークン化中...",
+        };
+        console.log(`[TranslationSystem][translate] ${tokenizeMsg.message}`);
+        onProgress(tokenizeMsg);
+      }
       const { input_ids } = this.tokenizer.tokenize(text);
       const inputIdsTensor = new ort.Tensor(
         "int64",
         BigInt64Array.from(input_ids[0].map(BigInt)),
         [1, input_ids[0].length]
       );
+      console.log(
+        `[TranslationSystem][translate] トークン化結果 (input_ids): ${
+          input_ids[0]
+        }, Tensor shape: [${inputIdsTensor.dims.join(",")}]`
+      );
 
       // デコーダーの開始トークンIDを設定
-      // const tgtLangToken = this.tokenizer.getLangToken(targetLang); // 未使用
       const tgtLangId = this.tokenizer.getLangId(targetLang);
       if (tgtLangId === undefined) {
         throw new Error(
-          `ターゲット言語 ${targetLang} のトークンIDが見つかりません。`
+          `ターゲット言語 ${targetLang} のトークンIDが見つかりません。利用可能な言語: ${Object.keys(
+            this.config?.lang_to_id || {}
+          ).join(", ")}`
         );
       }
       this.tokenizer.setDecoderStartTokenId(tgtLangId);
+      console.log(
+        `[TranslationSystem][translate] ターゲット言語ID (${targetLang}): ${tgtLangId}, Decoder StartトークンIDを ${tgtLangId} に設定`
+      );
 
       const decoderStartTokenId = this.tokenizer.decoderStartToken;
       if (decoderStartTokenId === null) {
         throw new Error("デコーダー開始トークンIDが取得できません。");
       }
+      console.log(
+        `[TranslationSystem][translate] 実際のDecoder StartトークンID: ${decoderStartTokenId}`
+      );
 
       const feeds: Record<string, ort.Tensor> = {
         input_ids: inputIdsTensor,
@@ -310,22 +513,57 @@ export class TranslationSystem {
         ),
       };
 
-      if (onProgress)
-        onProgress({ type: "info", message: "ONNXモデルで推論中..." });
+      if (onProgress) {
+        const inferMsg: StatusMessage = {
+          type: "info",
+          message: "ONNXモデルで推論中...",
+        };
+        console.log(`[TranslationSystem][translate] ${inferMsg.message}`);
+        onProgress(inferMsg);
+      }
 
       // Beam Searchを手動で実装 (簡易版)
       const numBeams = this.config.num_beams || 4;
       const maxLength = this.config.max_length || 200;
-      const beams: Array<{ tokens: number[]; score: number }> = [
-        { tokens: [decoderStartTokenId], score: 0.0 },
-      ];
-      const completedSequences: Array<{ tokens: number[]; score: number }> = [];
+      let beams: Array<{
+        tokens: number[];
+        score: number;
+        completed: boolean;
+      }> = [{ tokens: [decoderStartTokenId], score: 0.0, completed: false }];
+      const completedSequences: Array<{
+        tokens: number[];
+        score: number;
+        completed: boolean;
+      }> = [];
+      console.log(
+        `[TranslationSystem][translate] Beam Search開始: numBeams=${numBeams}, maxLength=${maxLength}`
+      );
 
       for (let step = 0; step < maxLength; step++) {
-        if (beams.length === 0) break;
+        if (beams.every((b) => b.completed)) {
+          console.log(
+            `[TranslationSystem][translate] Beam Search: 全てのビームが完了 (ステップ ${step})`
+          );
+          break;
+        }
+        if (beams.length === 0 && completedSequences.length === 0 && step > 0) {
+          console.warn(
+            `[TranslationSystem][translate] Beam Search: 有効なビームがありません (ステップ ${step})`
+          );
+          break;
+        }
 
-        const nextBeams: Array<{ tokens: number[]; score: number }> = [];
+        const nextBeamsAccumulator: Array<{
+          tokens: number[];
+          score: number;
+          completed: boolean;
+        }> = [];
         for (const beam of beams) {
+          if (beam.completed) {
+            nextBeamsAccumulator.push(beam); // 完了したビームはそのまま次へ
+            continue;
+          }
+
           feeds.decoder_input_ids = new ort.Tensor(
             "int64",
             BigInt64Array.from(beam.tokens.map(BigInt)),
@@ -333,69 +571,126 @@ export class TranslationSystem {
           );
 
           const output = await this.session.run(feeds);
-          const logits = output.logits.data as Float32Array; // 型アサーション
+          const logits = output.logits.data as Float32Array;
 
-          // 次のトークンの確率を取得 (最後のトークンのみ)
           const nextTokenLogits = logits.slice(
             (beam.tokens.length - 1) * this.config.vocab_size,
             beam.tokens.length * this.config.vocab_size
           );
 
-          // ソフトマックス関数で確率に変換
           const probabilities = this.softmax(nextTokenLogits);
-
-          // 上位k個のトークンを選択 (k=numBeams)
           const topK = this.getTopK(probabilities, numBeams);
 
           for (const { index: tokenId, probability } of topK) {
-            const newTokens = [...beam.tokens, tokenId];
-            const newScore = beam.score + Math.log(probability); // 対数確率を使用
+            if (probability === 0) continue; // 確率0のトークンは無視
 
-            if (tokenId === this.tokenizer.eosToken) {
-              completedSequences.push({ tokens: newTokens, score: newScore });
+            const newTokens = [...beam.tokens, tokenId];
+            const newScore = beam.score + Math.log(probability); // 対数確率
+
+            if (
+              tokenId === this.tokenizer.eosToken ||
+              newTokens.length >= maxLength
+            ) {
+              completedSequences.push({
+                tokens: newTokens,
+                score: newScore,
+                completed: true,
+              });
             } else {
-              nextBeams.push({ tokens: newTokens, score: newScore });
+              nextBeamsAccumulator.push({
+                tokens: newTokens,
+                score: newScore,
+                completed: false,
+              });
             }
           }
         }
 
-        // ビームをスコアでソートし、上位numBeams個を保持
-        beams.length = 0; // beamsをクリア
-        beams.push(
-          ...nextBeams.sort((a, b) => b.score - a.score).slice(0, numBeams)
-        );
+        // ビームをスコアでソートし、上位numBeams個を保持 (未完了のものから優先)
+        nextBeamsAccumulator.sort((a, b) => b.score - a.score); // スコアで降順ソート
+        beams = nextBeamsAccumulator
+          .filter((b) => !b.completed)
+          .slice(0, numBeams);
 
-        if (onProgress && step % 10 === 0) {
-          onProgress({
+        // 完了したシーケンスも保持しつつ、ビーム数を超えないように調整
+        // completedSequencesもスコアでソートし、上位を保持するなどの戦略も考えられる
+
+        if (onProgress && step % 5 === 0) {
+          const progressInfo: StatusMessage = {
             type: "info",
-            message: `推論中 (ステップ ${step + 1}/${maxLength})...`,
-          });
+            message: `推論中 (ステップ ${
+              step + 1
+            }/${maxLength}, 有効ビーム数: ${beams.length}, 完了シーケンス数: ${
+              completedSequences.length
+            })...`,
+          };
+          console.log(`[TranslationSystem][translate] ${progressInfo.message}`);
+          onProgress(progressInfo);
         }
       }
+      console.log(
+        `[TranslationSystem][translate] Beam Search終了 (ステップ完了). 有効ビーム数: ${beams.length}, 完了シーケンス数: ${completedSequences.length}`
+      );
 
-      // 最もスコアの高い完了シーケンスを選択
-      const bestSequence =
-        completedSequences.sort((a, b) => b.score - a.score)[0]?.tokens ||
-        beams.sort((a, b) => b.score - a.score)[0]?.tokens;
+      // 最もスコアの高いシーケンスを選択 (完了シーケンスを優先)
+      const allCandidates = [
+        ...completedSequences,
+        ...beams.filter((b) => !b.completed),
+      ];
+      allCandidates.sort((a, b) => b.score - a.score); // スコアで降順ソート
+
+      const bestSequence = allCandidates[0]?.tokens;
 
       if (!bestSequence) {
+        console.error(
+          "[TranslationSystem][translate] 翻訳結果が生成されませんでした。候補シーケンス:",
+          allCandidates
+        );
         throw new Error("翻訳結果が生成されませんでした。");
       }
+      console.log(
+        `[TranslationSystem][translate] 最良シーケンス (スコア: ${allCandidates[0]?.score.toFixed(
+          4
+        )}): ${bestSequence}`
+      );
 
-      if (onProgress)
-        onProgress({ type: "info", message: "トークンをデコード中..." });
+      if (onProgress) {
+        const decodeMsg: StatusMessage = {
+          type: "info",
+          message: "トークンをデコード中...",
+        };
+        console.log(`[TranslationSystem][translate] ${decodeMsg.message}`);
+        onProgress(decodeMsg);
+      }
       const translatedText = this.tokenizer.decode(bestSequence, true);
+      console.log(
+        `[TranslationSystem][translate] 翻訳結果: "${translatedText}"`
+      );
 
-      if (onProgress)
-        onProgress({ type: "success", message: "翻訳処理が完了しました。" });
+      if (onProgress) {
+        const successMsg: StatusMessage = {
+          type: "success",
+          message: "翻訳処理が完了しました。",
+        };
+        console.log(`[TranslationSystem][translate] ${successMsg.message}`);
+        onProgress(successMsg);
+      }
       return translatedText;
     } catch (error) {
-      console.error("翻訳エラー:", error);
-      if (onProgress)
-        onProgress({
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      console.error(
+        "[TranslationSystem][translate] 翻訳エラー:",
+        errorMessage,
+        error
+      );
+      if (onProgress) {
+        const errorMsg: StatusMessage = {
           type: "error",
-          message: `翻訳に失敗しました: ${error}`,
-        });
+          message: `翻訳に失敗しました: ${errorMessage}`,
+        };
+        onProgress(errorMsg);
+      }
       throw error;
     }
   }
@@ -457,7 +752,10 @@ export class TranslationSystem {
       for (let i = 0; i < result.length; i++) {
         result[i] = fallbackValue;
       }
-      // console.warn("Softmax sumExps is zero or not finite. Applied fallback distribution.");
+      console.warn(
+        "[TranslationSystem][softmax] Softmax sumExps is zero or not finite. Applied fallback distribution. Input array sample:",
+        array.slice(0, 5)
+      );
       return result;
     }
 

@@ -60,32 +60,64 @@ export function TranslationApp() {
     setProgress(0);
 
     try {
+      console.log("[TranslationApp] handleDownloadModel - 開始");
       await translationSystemRef.current.downloadAndLoadModel(
-        (statusMsg) => setStatus(statusMsg),
-        (progressValue) => setProgress(progressValue),
-        (filename, fileProgress) => {
-          setFileStatuses((prev) => ({
-            ...prev,
-            [filename]: {
-              ...prev[filename],
-              progress: fileProgress,
-              completed: false,
-            },
-          }));
+        (statusMsg) => {
+          // console.log("[TranslationApp] Status update:", statusMsg);
+          setStatus(statusMsg);
+        },
+        (overallProgress) => {
+          // console.log("[TranslationApp] Overall progress update:", overallProgress);
+          setProgress(overallProgress);
+        },
+        (filename, fileSpecificProgress, loadedBytes, totalBytes) => {
+          // console.log(`[TranslationApp] File progress: ${filename} - ${fileSpecificProgress}% (${loadedBytes}/${totalBytes})`);
+          setFileStatuses((prev) => {
+            const newStatuses = {
+              ...prev,
+              [filename]: {
+                progress: fileSpecificProgress,
+                loaded: loadedBytes,
+                size: totalBytes, // totalBytes が0の場合もあるので注意 (content-lengthがない場合など)
+                completed: fileSpecificProgress === 100,
+              },
+            };
+            // console.log("[TranslationApp] Updated fileStatuses:", newStatuses);
+            return newStatuses;
+          });
         },
         (filename, size) => {
-          setFileStatuses((prev) => ({
-            ...prev,
-            [filename]: { progress: 100, size, completed: true },
-          }));
+          console.log(
+            `[TranslationApp] File complete: ${filename} - ${size} bytes`
+          );
+          setFileStatuses((prev) => {
+            const newStatuses = {
+              ...prev,
+              [filename]: {
+                progress: 100,
+                loaded: size,
+                size,
+                completed: true,
+              },
+            };
+            // console.log("[TranslationApp] Updated fileStatuses (complete):", newStatuses);
+            return newStatuses;
+          });
         }
       );
-
+      console.log("[TranslationApp] handleDownloadModel - モデル読み込み成功");
       setIsModelLoaded(true);
       setShowCacheManagement(true);
     } catch (error) {
-      console.error("モデル読み込みエラー:", error);
+      console.error("[TranslationApp] モデル読み込みエラー:", error);
+      setStatus({
+        message: `モデル読み込みエラー: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        type: "error",
+      });
     } finally {
+      console.log("[TranslationApp] handleDownloadModel - 終了処理");
       setIsDownloading(false);
     }
   };

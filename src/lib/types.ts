@@ -46,6 +46,7 @@ export interface TranslationConfig {
   vocab_size: number;
   num_beams?: number;
   max_length?: number;
+  lang_to_id?: Record<string, number>; // 追加: 言語名からIDへのマッピング
   // 他にもconfig.jsonに含まれる可能性のあるフィールドを追加
   model_type?: string;
   forced_bos_token_id?: number;
