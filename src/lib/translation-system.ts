@@ -457,21 +457,129 @@ export class TranslationSystem {
     }
 
     try {
+      // 言語コードの正規化
+      const normalizedSourceLang = this.normalizeLangCode(sourceLang);
+      const normalizedTargetLang = this.normalizeLangCode(targetLang);
+
       console.log(
-        `[TranslationSystem][translate] 入力テキスト: "${text}", ソース言語: ${sourceLang}, ターゲット言語: ${targetLang}`
+        `[TranslationSystem][translate] 入力テキスト: "${text}", ソース言語: ${sourceLang} -> ${normalizedSourceLang}, ターゲット言語: ${targetLang} -> ${normalizedTargetLang}`
       );
+
       // ソース言語のトークンIDを設定
-      const srcLangId = this.tokenizer.getLangId(sourceLang);
+      const srcLangId = this.tokenizer.getLangId(normalizedSourceLang);
       if (srcLangId === undefined) {
+        // 利用可能な言語リストを生成
+        const availableLangs = [
+          "af",
+          "am",
+          "ar",
+          "ast",
+          "az",
+          "ba",
+          "be",
+          "bg",
+          "bn",
+          "br",
+          "bs",
+          "ca",
+          "ceb",
+          "cs",
+          "cy",
+          "da",
+          "de",
+          "el",
+          "en",
+          "es",
+          "et",
+          "fa",
+          "ff",
+          "fi",
+          "fr",
+          "fy",
+          "ga",
+          "gd",
+          "gl",
+          "gu",
+          "ha",
+          "he",
+          "hi",
+          "hr",
+          "ht",
+          "hu",
+          "hy",
+          "id",
+          "ig",
+          "ilo",
+          "is",
+          "it",
+          "ja",
+          "jv",
+          "ka",
+          "kk",
+          "km",
+          "kn",
+          "ko",
+          "lb",
+          "lg",
+          "ln",
+          "lo",
+          "lt",
+          "lv",
+          "mg",
+          "mk",
+          "ml",
+          "mn",
+          "mr",
+          "ms",
+          "my",
+          "ne",
+          "nl",
+          "no",
+          "ns",
+          "oc",
+          "or",
+          "pa",
+          "pl",
+          "ps",
+          "pt",
+          "ro",
+          "ru",
+          "sd",
+          "si",
+          "sk",
+          "sl",
+          "so",
+          "sq",
+          "sr",
+          "ss",
+          "su",
+          "sv",
+          "sw",
+          "ta",
+          "th",
+          "tl",
+          "tn",
+          "tr",
+          "uk",
+          "ur",
+          "uz",
+          "vi",
+          "wo",
+          "xh",
+          "yi",
+          "yo",
+          "zh",
+          "zu",
+        ];
         throw new Error(
-          `ソース言語 ${sourceLang} のトークンIDが見つかりません。利用可能な言語: ${Object.keys(
-            this.config?.lang_to_id || {}
-          ).join(", ")}`
+          `ソース言語 ${sourceLang} (正規化後: ${normalizedSourceLang}) のトークンIDが見つかりません。利用可能な言語: ${availableLangs.join(
+            ", "
+          )}`
         );
       }
       this.tokenizer.setEosTokenId(srcLangId);
       console.log(
-        `[TranslationSystem][translate] ソース言語ID (${sourceLang}): ${srcLangId}, EOSトークンIDを ${srcLangId} に設定`
+        `[TranslationSystem][translate] ソース言語ID (${normalizedSourceLang}): ${srcLangId}, EOSトークンIDを ${srcLangId} に設定`
       );
 
       if (onProgress) {
@@ -495,17 +603,120 @@ export class TranslationSystem {
       );
 
       // デコーダーの開始トークンIDを設定
-      const tgtLangId = this.tokenizer.getLangId(targetLang);
+      const tgtLangId = this.tokenizer.getLangId(normalizedTargetLang);
       if (tgtLangId === undefined) {
+        // 利用可能な言語リストを生成
+        const availableLangs = [
+          "af",
+          "am",
+          "ar",
+          "ast",
+          "az",
+          "ba",
+          "be",
+          "bg",
+          "bn",
+          "br",
+          "bs",
+          "ca",
+          "ceb",
+          "cs",
+          "cy",
+          "da",
+          "de",
+          "el",
+          "en",
+          "es",
+          "et",
+          "fa",
+          "ff",
+          "fi",
+          "fr",
+          "fy",
+          "ga",
+          "gd",
+          "gl",
+          "gu",
+          "ha",
+          "he",
+          "hi",
+          "hr",
+          "ht",
+          "hu",
+          "hy",
+          "id",
+          "ig",
+          "ilo",
+          "is",
+          "it",
+          "ja",
+          "jv",
+          "ka",
+          "kk",
+          "km",
+          "kn",
+          "ko",
+          "lb",
+          "lg",
+          "ln",
+          "lo",
+          "lt",
+          "lv",
+          "mg",
+          "mk",
+          "ml",
+          "mn",
+          "mr",
+          "ms",
+          "my",
+          "ne",
+          "nl",
+          "no",
+          "ns",
+          "oc",
+          "or",
+          "pa",
+          "pl",
+          "ps",
+          "pt",
+          "ro",
+          "ru",
+          "sd",
+          "si",
+          "sk",
+          "sl",
+          "so",
+          "sq",
+          "sr",
+          "ss",
+          "su",
+          "sv",
+          "sw",
+          "ta",
+          "th",
+          "tl",
+          "tn",
+          "tr",
+          "uk",
+          "ur",
+          "uz",
+          "vi",
+          "wo",
+          "xh",
+          "yi",
+          "yo",
+          "zh",
+          "zu",
+        ];
         throw new Error(
-          `ターゲット言語 ${targetLang} のトークンIDが見つかりません。利用可能な言語: ${Object.keys(
-            this.config?.lang_to_id || {}
-          ).join(", ")}`
+          `ターゲット言語 ${targetLang} (正規化後: ${normalizedTargetLang}) のトークンIDが見つかりません。利用可能な言語: ${availableLangs.join(
+            ", "
+          )}`
         );
       }
       this.tokenizer.setDecoderStartTokenId(tgtLangId);
       console.log(
-        `[TranslationSystem][translate] ターゲット言語ID (${targetLang}): ${tgtLangId}, Decoder StartトークンIDを ${tgtLangId} に設定`
+        `[TranslationSystem][translate] ターゲット言語ID (${normalizedTargetLang}): ${tgtLangId}, Decoder StartトークンIDを ${tgtLangId} に設定`
       );
 
       const decoderStartTokenId = this.tokenizer.decoderStartToken;
@@ -829,6 +1040,119 @@ export class TranslationSystem {
   //   }
   //   return maxIndex;
   // }
+
+  // 言語コードの正規化メソッド
+  private normalizeLangCode(langCode: string): string {
+    // ISO 639-3 から ISO 639-1 への変換マッピング
+    const langCodeMapping: Record<string, string> = {
+      // 一般的な言語コード変換
+      jpn: "ja", // 日本語
+      eng: "en", // 英語
+      fra: "fr", // フランス語
+      deu: "de", // ドイツ語
+      spa: "es", // スペイン語
+      ita: "it", // イタリア語
+      por: "pt", // ポルトガル語
+      rus: "ru", // ロシア語
+      kor: "ko", // 韓国語
+      zho: "zh", // 中国語
+      ara: "ar", // アラビア語
+      hin: "hi", // ヒンディー語
+      tha: "th", // タイ語
+      vie: "vi", // ベトナム語
+      nld: "nl", // オランダ語
+      swe: "sv", // スウェーデン語
+      nor: "no", // ノルウェー語
+      dan: "da", // デンマーク語
+      fin: "fi", // フィンランド語
+      pol: "pl", // ポーランド語
+      ces: "cs", // チェコ語
+      hun: "hu", // ハンガリー語
+      ron: "ro", // ルーマニア語
+      bul: "bg", // ブルガリア語
+      hrv: "hr", // クロアチア語
+      slv: "sl", // スロベニア語
+      slk: "sk", // スロバキア語
+      lit: "lt", // リトアニア語
+      lav: "lv", // ラトビア語
+      est: "et", // エストニア語
+      ell: "el", // ギリシャ語
+      tur: "tr", // トルコ語
+      heb: "he", // ヘブライ語
+      fas: "fa", // ペルシャ語
+      urd: "ur", // ウルドゥー語
+      ben: "bn", // ベンガル語
+      tam: "ta", // タミル語
+      tel: "te", // テルグ語（注：SMALL100にはte無し、taを使用）
+      mar: "mr", // マラーティー語
+      guj: "gu", // グジャラート語
+      kan: "kn", // カンナダ語
+      mal: "ml", // マラヤーラム語
+      pan: "pa", // パンジャブ語
+      ori: "or", // オリヤー語
+      asm: "as", // アッサム語（注：SMALL100にはas無し）
+      nep: "ne", // ネパール語
+      sin: "si", // シンハラ語
+      mya: "my", // ミャンマー語
+      khm: "km", // クメール語
+      lao: "lo", // ラオ語
+      kat: "ka", // ジョージア語
+      hye: "hy", // アルメニア語
+      kaz: "kk", // カザフ語
+      uzb: "uz", // ウズベク語
+      aze: "az", // アゼルバイジャン語
+      tuk: "tk", // トルクメン語（注：SMALL100にはtk無し）
+      kir: "ky", // キルギス語（注：SMALL100にはky無し）
+      tgk: "tg", // タジク語（注：SMALL100にはtg無し）
+      mon: "mn", // モンゴル語
+      bod: "bo", // チベット語（注：SMALL100にはbo無し）
+      msa: "ms", // マレー語
+      ind: "id", // インドネシア語
+      tgl: "tl", // タガログ語
+      ceb: "ceb", // セブアノ語（SMALL100では3文字）
+      ilo: "ilo", // イロカノ語（SMALL100では3文字）
+      jav: "jv", // ジャワ語
+      sun: "su", // スンダ語
+      afr: "af", // アフリカーンス語
+      amh: "am", // アムハラ語
+      hau: "ha", // ハウサ語
+      ibo: "ig", // イボ語
+      yor: "yo", // ヨルバ語
+      swa: "sw", // スワヒリ語
+      som: "so", // ソマリ語
+      mlg: "mg", // マダガスカル語
+      sqi: "sq", // アルバニア語
+      mkd: "mk", // マケドニア語
+      bos: "bs", // ボスニア語
+      srp: "sr", // セルビア語
+      mnt: "mt", // マルタ語（注：SMALL100にはmt無し）
+      eus: "eu", // バスク語（注：SMALL100にはeu無し）
+      cat: "ca", // カタルーニャ語
+      glg: "gl", // ガリシア語
+      ast: "ast", // アストゥリアス語（SMALL100では3文字）
+      oci: "oc", // オック語
+      bre: "br", // ブルトン語
+      cym: "cy", // ウェールズ語
+      gle: "ga", // アイルランド語
+      gla: "gd", // スコットランド・ゲール語
+      isl: "is", // アイスランド語
+      fao: "fo", // フェロー語（注：SMALL100にはfo無し）
+      fry: "fy", // 西フリジア語
+      ltz: "lb", // ルクセンブルク語
+      yid: "yi", // イディッシュ語
+      bel: "be", // ベラルーシ語
+      ukr: "uk", // ウクライナ語
+      bak: "ba", // バシキール語
+      tat: "tt", // タタール語（注：SMALL100にはtt無し）
+      chv: "cv", // チュヴァシ語（注：SMALL100にはcv無し）
+    };
+
+    // 小文字に変換
+    const normalizedCode = langCode.toLowerCase();
+
+    // マッピングがあれば変換、なければそのまま返す
+    return langCodeMapping[normalizedCode] || normalizedCode;
+  }
 
   // createTokenizerJson メソッドは tokenizer.json を直接使用するため不要になった
   // private createTokenizerJson(
